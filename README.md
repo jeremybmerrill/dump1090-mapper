@@ -7,7 +7,7 @@ a node app to generate a map of an airplane's flight path, using its ICAO addres
 
 `sh mapify.sh ACB963` will generate a PNG map (by creating the SVG, then converting it to PNG with Apache Batik)
 
-If your MySQL database is not named `dump1090` or isn't accessible by the current user on localhost, specify how to reach it with the environment variables `MYSQLHOST`, `MYSQLUSER`, `MYSQLPASSWORD` and `MYSQLDATABASE`.
+If your MySQL database is not named `dump1090` or isn't accessible by the current user on localhost, specify how to reach it with the environment variables `MYSQLHOST`, `MYSQLPORT`, `MYSQLUSER`, `MYSQLPASSWORD` and `MYSQLDATABASE`.
 
 prereqs
 -------
