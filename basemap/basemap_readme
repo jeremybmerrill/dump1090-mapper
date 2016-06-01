@@ -1,0 +1,14 @@
+counties (get NY, NJ, CT, then replace the Census's NYC counties with NYBB from Bytes of the Big Apple for better water)
+
+  rm -f src/cb_2015_us_county_500k/cb_2015_us_county_500k_nynjct.shp
+  ogr2ogr -where "STATEFP in ('34', '09') or (STATEFP = '36' and countyfp not in ('005', '047','061', '081', '085' ))" src/cb_2015_us_county_500k/cb_2015_us_county_500k_nynjct.shp src/cb_2015_us_county_500k/cb_2015_us_county_500k.shp
+  rm -r src/counties
+  mkdir src/counties
+  ogr2ogr -f 'ESRI Shapefile' src/counties/counties.shp src/nybb_16b/nybb.4326.shp
+  ogr2ogr -f 'ESRI Shapefile' -t_srs EPSG:4326 -update -append -addfields src/counties/counties.shp src/cb_2015_us_county_500k/cb_2015_us_county_500k_nynjct.shp -nln counties
+  topojson  -p -o json/counties.json src/counties/counties.shp
+
+
+
+major streets/parks in NYC
+airports

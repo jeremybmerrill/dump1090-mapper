@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+.county {
+  fill: #EEE8AA;
+}
+.state-boundary {
+  fill: none;
+  stroke: black;
+}
+.county-boundary {
+  fill: none;
+  stroke: #ccc;
+  stroke-dasharray: 3;
+}
+
+.nycstuff.Airport {
+  fill: #ffcccc;
+}
+.nycstuff:not(.Airport){
+  fill: #006400;
+}
+
+.airport {
+  stroke: black;
+}
+
+
+</style>
+<body>
+<script src="//d3js.org/d3.v3.min.js" charset="utf-8"></script>
+<script src="//d3js.org/topojson.v1.min.js"></script>
+<script>
+
+
+var width = 600,
+    height = 600;
+
+var svg = d3.select("body").append("svg")
+    .attr("width", width)
+    .attr("height", height);
+  var projection = d3.geo.albers()
+    .center([0, 41]) // this doesn't actually center. how dumb. [0, desired_longitude]
+    .rotate([73.5, 0]) // [-desired_latitude, 0]
+    .parallels([29.5,44.5])
+    .scale(32000)
+    .translate([width / 2, height / 2]);
+  var path = d3.geo.path()
+    .projection(projection);
+
+
+d3.json("json/counties.json", function(error, nytopojson) {
+  if (error) return console.error(error);
+  var nygeojson = topojson.feature(nytopojson, nytopojson.objects.counties);
+
+  svg.selectAll("path") // selects path elements, will make them if they don't exist
+   .data(nygeojson.features) // iterates over geo feature
+   .enter() // adds feature if it doesn't exist as an element
+   .append("path") // defines element as a path
+    .attr("class", function(d) { return "county"; })
+    .attr("d", path); // path generator translates geo data to SVG
+
+  svg.append("path")
+    .datum(topojson.mesh(nytopojson, nytopojson.objects.counties, function(a, b) { return a !== b && (a.properties.STATEFP || '036') !== ( b.properties.STATEFP || '036'); })) // the five boros have a null STATEFP because they're from a different shapefile.
+    .attr("d", path)
+    .attr("class", "state-boundary");
+
+  svg.append("path")
+    .datum(topojson.mesh(nytopojson, nytopojson.objects.counties, function(a, b) { return a !== b && (a.properties.STATEFP || '036') === ( b.properties.STATEFP || '036'); })) // the five boros have a null STATEFP because they're from a different shapefile.
+    .attr("d", path)
+    .attr("class", "county-boundary");
+
+  d3.json("json/nyc_parks_airports.json", function(error, nycstufftopo) {
+    if (error) return console.error(error);
+    console.log(nycstufftopo);
+
+    var nycstuffgeo = topojson.feature(nycstufftopo, nycstufftopo.objects.nyc_parks_airports);
+
+    svg.selectAll(".nycstuff") // selects path elements, will make them if they don't exist
+      .data(nycstuffgeo.features) // iterates over geo feature
+      .enter() // adds feature if it doesn't exist as an element
+      .append("path") // defines element as a path
+      .attr("class", function(d){ return "nycstuff " + d.properties["ntaname"]; })
+      .attr("d", path); // path generator translates geo data to SVG
+  });
+
+  d3.json("json/airports.json", function(error, airportstopojson) {
+    if (error) return console.error(error);
+    console.log(airportstopojson);
+
+    var airportsgeo = topojson.feature(airportstopojson, airportstopojson.objects.airports);
+    svg.selectAll(".airport") // selects path elements, will make them if they don't exist
+      .data(airportsgeo.features) // iterates over geo feature
+      .enter()                    // adds feature if it doesn't exist as an element
+      .append("path")             // defines element as a path
+      .attr("class", function(d){ return "airport " + d.properties["LOCID"]; })
+      .attr("d", path);           // path generator translates geo data to SVG
+    
+    // labels each runway, which is not what I want.
+    // svg.selectAll("text.airport-label")
+    //   .data(airportsgeo.features)
+    //   .enter()
+    //   .append("text")
+    //     .attr("class", "airport-label")
+    //     .attr("transform", function(d) { return "translate(" + path.centroid(d) + ")"; })
+    //     .text(function(d) { return d.properties.LOCID;} );
+
+  });
+});
+
+</script>
