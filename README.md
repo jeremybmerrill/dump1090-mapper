@@ -1,7 +1,7 @@
 make maps of planes
 ===================
 
-a node app to generate a map of an airplane's flight path, using its ICAO address and a [mtigas/dump1090-stream-parser database](https://github.com/mtigas/dump1090-stream-parser database)
+a node app to generate a map of an airplane's flight path, using its ICAO address and a [mtigas/dump1090-stream-parser](https://github.com/mtigas/dump1090-stream-parser) database
 
 `nodejs mapify.js ACB963` will generate an SVG map of the most recent path of the NYPD helicopter with the registration number N919PD.
 
