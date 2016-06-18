@@ -9,13 +9,15 @@ a node app to generate a map of an airplane's flight path, using its ICAO addres
 
 If your MySQL database is not named `dump1090` or isn't accessible by the current user on localhost, specify how to reach it with the environment variables `MYSQLHOST`, `MYSQLPORT`, `MYSQLUSER`, `MYSQLPASSWORD` and `MYSQLDATABASE`.
 
-prereqs
--------
+prereqs and dependencies
+------------------------
 
   - ADSB radio, etc.
   - github.com/mutability/dump1090
-  - github.com/mtigas/dump1090-stream-parser
-  - nodejs, etc. and stuff
+  - github.com/mtigas/dump1090-stream-parser (which requires a MySQL database someplace)
+  - a mysql client
+  - nodejs, etc.
+  - the mapify.sh script depends on [csvkit](https://github.com/wireservice/csvkit)'s `csvcut` and Java for Apache Batik. These are not hard dependencies; it's just conveniences for converting SVG image to PNG image and a US N-Number to an ICAO address.
 
 
 TODO
@@ -24,7 +26,6 @@ TODO
   - plane path should indicate altitude or speed or something with a gradient (https://developer.mozilla.org/en-US/docs/Web/SVG/Tutorial/Gradients)
   - maybe label airports?
   - use an API or the FAA airplane ownership database to allow planes to be specified by registration, not ICAO address.
-
 
 Some useful resources.
 - http://geoexamples.com/d3/2015/05/29/d3-maps-nodejs.html
