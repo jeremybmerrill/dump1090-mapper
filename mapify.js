@@ -28,7 +28,7 @@ var linestring_template = {
 var connection = mysql.createConnection({
   host     : process.env.MYSQLHOST,
   port     : process.env.MYSQLPORT,
-  user     : process.env.MYSQLUSER || process.env.MYSQLUSERNAME,
+  user     : process.env.MYSQLUSER || process.env.MYSQLUSERNAME || process.env.USER,
   password : process.env.MYSQLPASSWORD,
   database : process.env.MYSQLDATABASE || 'dump1090'
 });
