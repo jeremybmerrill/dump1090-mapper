@@ -99,6 +99,8 @@ connection.query(query, function(err, rows, fields) {
       var path = window.d3.geo.path()
         .projection(projection);
 
+      window.d3.select("body").style("background-color", "#e6f2ff");
+
       var svg = window.d3.select("body").append("svg")
           .attr("width", width)
           .attr("height", height)
@@ -115,7 +117,7 @@ connection.query(query, function(err, rows, fields) {
         .enter() // adds feature if it doesn't exist as an element
         .append("path") // defines element as a path
         .attr("class", function(d) { return "county " + "state"+d.properties["STATEFP"]+ " " +"cty"+d.properties["COUNTYFP"]+ " " + d.properties["NAME"]; })
-        .style("fill", "#EEE8AA")
+        .style("fill", "#ffffca")
         .style("stroke", "black")
         .attr("d", path) // path generator translates geo data to SVG
 
@@ -134,6 +136,18 @@ connection.query(query, function(err, rows, fields) {
         .style("stroke", "#ccc")
         .style("stroke-dasharray", "1");
 
+      var bridgestopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/bridges.json", 'utf8'));
+      var bridgesgeo = topojson.feature(bridgestopo, bridgestopo.objects['bridges']);
+      svg.selectAll(".bridge") // selects path elements, will make them if they don't exist
+        .data(bridgesgeo.features) // iterates over geo feature
+        .enter() // adds feature if it doesn't exist as an element
+        .append("path") // defines element as a path
+        .attr("class", function(d){ return "bridge " + d.properties.linearid; })
+        .style("stroke", "#ddd")
+        .style("stroke-width","0.5")
+        .style("fill", "none")
+        .attr("d", path) // path generator translates geo data to SVG
+
       var nycstufftopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nyc_parks_airports.json", 'utf8'));
       var nycstuffgeo = topojson.feature(nycstufftopo, nycstufftopo.objects['nyc_parks_airports']);
       svg.selectAll(".nycstuff") // selects path elements, will make them if they don't exist
@@ -141,7 +155,7 @@ connection.query(query, function(err, rows, fields) {
         .enter() // adds feature if it doesn't exist as an element
         .append("path") // defines element as a path
         .attr("class", function(d){ return "nycstuff " + d.properties["ntaname"]; })
-        .style("fill", function(d){ return d.properties.ntaname == "Airport" ? "#ffcccc" : "#006400"; })
+        .style("fill", function(d){ return d.properties.ntaname == "Airport" ? "#ffcccc" : "#339933"; })
         .attr("d", path) // path generator translates geo data to SVG
       var airportstopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/airports.json", 'utf8'));
       var airportsgeo = topojson.feature(airportstopo, airportstopo.objects['airports']);
