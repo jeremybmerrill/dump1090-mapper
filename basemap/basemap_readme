@@ -8,6 +8,7 @@ counties (get NY, NJ, CT, then replace the Census's NYC counties with NYBB from 
   ogr2ogr -f 'ESRI Shapefile' -t_srs EPSG:4326 -update -append -addfields src/counties/counties.shp src/cb_2015_us_county_500k/cb_2015_us_county_500k_nynjct.shp -nln counties
   topojson  -p -o json/counties.json src/counties/counties.shp
 
+  topojson  -p -o json/bridges.json src/bridges/bridges.shp
 
 
 major streets/parks in NYC

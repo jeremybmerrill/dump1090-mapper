@@ -3,7 +3,7 @@
 <style>
 
 .county {
-  fill: #EEE8AA;
+  fill: #ffffca;
 }
 .state-boundary {
   fill: none;
@@ -19,11 +19,17 @@
   fill: #ffcccc;
 }
 .nycstuff:not(.Airport){
-  fill: #006400;
+  fill: #339933;
 }
 
 .airport {
   stroke: black;
+}
+
+.bridge_expy {
+  fill: none;
+  stroke: #eee;
+  stroke-width: 0.5;
 }
 
 
@@ -36,6 +42,8 @@
 
 var width = 600,
     height = 600;
+
+d3.select("body").style("background-color", "#e6f2ff");
 
 var svg = d3.select("body").append("svg")
     .attr("width", width)
@@ -70,6 +78,21 @@ d3.json("json/counties.json", function(error, nytopojson) {
     .datum(topojson.mesh(nytopojson, nytopojson.objects.counties, function(a, b) { return a !== b && (a.properties.STATEFP || '036') === ( b.properties.STATEFP || '036'); })) // the five boros have a null STATEFP because they're from a different shapefile.
     .attr("d", path)
     .attr("class", "county-boundary");
+
+  d3.json("json/bridges.json", function(error, bridgestopo) {
+    if (error) return console.error(error);
+    console.log(bridgestopo);
+
+    var bridgesgeo = topojson.feature(bridgestopo, bridgestopo.objects.bridges);
+    svg.selectAll(".bridge_expy") // selects path elements, will make them if they don't exist
+      .data(bridgesgeo.features) // iterates over geo feature
+      .enter()                    // adds feature if it doesn't exist as an element
+      .append("path")             // defines element as a path
+      .attr("class", function(d){ return "bridge_expy " + d.properties["LOCID"]; })
+      .attr("d", path);           // path generator translates geo data to SVG
+    
+  });
+
 
   d3.json("json/nyc_parks_airports.json", function(error, nycstufftopo) {
     if (error) return console.error(error);

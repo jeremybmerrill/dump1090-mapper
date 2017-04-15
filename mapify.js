@@ -28,12 +28,12 @@ var linestring_template = {
 var connection = mysql.createConnection({
   host     : process.env.MYSQLHOST,
   port     : process.env.MYSQLPORT,
-  user     : process.env.MYSQLUSER || process.env.MYSQLUSERNAME,
+  user     : process.env.MYSQLUSER || process.env.MYSQLUSERNAME || process.env.USER,
   password : process.env.MYSQLPASSWORD,
   database : process.env.MYSQLDATABASE || 'dump1090'
 });
 
-var query = "select * from squitters where icao_addr = conv('"+input+"', 16,10) and lat is not null order by generated_datetime desc;";
+var query = "select *, convert_tz(generated_datetime, '+00:00', @@global.time_zone) as datetz from squitters where icao_addr = conv('"+input+"', 16,10) and lat is not null order by generated_datetime desc;";
 console.warn("query: " + query)
 connection.connect();
 connection.query(query, function(err, rows, fields) {
@@ -42,29 +42,33 @@ connection.query(query, function(err, rows, fields) {
   var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
   var lons = _(rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
 
-  if (lats.length == 0){
+  if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
     console.log("no geo data found for " + input)
     throw "no geo data found for " + input;
-  }
-
-  var max_lat = Math.max.apply(null, lats);
-  var min_lat = Math.min.apply(null, lats);
-  var avg_lat = lats.reduce(function(a, b){ return a+b}) / lats.length
-  var mid_lat = (max_lat + min_lat) / 2
-  var max_lon = Math.max.apply(null, lons);
-  var min_lon = Math.min.apply(null, lons);
-  var avg_lon = lons.reduce(function(a, b){ return a+b}) / lons.length
-  var mid_lon = (max_lon + min_lon) / 2
-
-  // console.log("Lat bounds: " + max_lat +" to " + min_lat)
-  // console.log("Long bounds: " + max_lon +" to " + min_lon)
- 
+  } 
 
   _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
-    two_rows[1]["timediff"] = two_rows[0].generated_datetime - two_rows[1].generated_datetime;
+    two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
   })
   var firstMoreThanAnHourBefore = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 360*1000; });
   var this_trajectory_rows = rows.slice(0, firstMoreThanAnHourBefore);
+
+
+  var this_trajectory_lats = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
+  var this_trajectory_lons = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
+  var max_lat = Math.max.apply(null, this_trajectory_lats);
+  var min_lat = Math.min.apply(null, this_trajectory_lats);
+  var avg_lat = this_trajectory_lats.reduce(function(a, b){ return a+b}) / this_trajectory_lats.length
+  var mid_lat = (max_lat + min_lat) / 2
+  var max_lon = Math.max.apply(null, this_trajectory_lons);
+  var min_lon = Math.min.apply(null, this_trajectory_lons);
+  var avg_lon = this_trajectory_lons.reduce(function(a, b){ return a+b}) / this_trajectory_lons.length
+  var mid_lon = (max_lon + min_lon) / 2
+
+  console.warn(this_trajectory_lons.length + " points");
+  console.warn("Lat bounds: " + max_lat +" to " + min_lat  + "; mid: " + mid_lat)
+  console.warn("Long bounds: " + max_lon +" to " + min_lon + "; mid: " + mid_lon)
+
 
   linestring_template["features"][0]["geometry"]["coordinates"] = _(this_trajectory_rows).map(function(row){ return [row["lon"], row["lat"]]}).reverse();
 
@@ -95,6 +99,8 @@ connection.query(query, function(err, rows, fields) {
       var path = window.d3.geo.path()
         .projection(projection);
 
+      window.d3.select("body").style("background-color", "#e6f2ff");
+
       var svg = window.d3.select("body").append("svg")
           .attr("width", width)
           .attr("height", height)
@@ -111,7 +117,7 @@ connection.query(query, function(err, rows, fields) {
         .enter() // adds feature if it doesn't exist as an element
         .append("path") // defines element as a path
         .attr("class", function(d) { return "county " + "state"+d.properties["STATEFP"]+ " " +"cty"+d.properties["COUNTYFP"]+ " " + d.properties["NAME"]; })
-        .style("fill", "#EEE8AA")
+        .style("fill", "#ffffca")
         .style("stroke", "black")
         .attr("d", path) // path generator translates geo data to SVG
 
@@ -130,6 +136,18 @@ connection.query(query, function(err, rows, fields) {
         .style("stroke", "#ccc")
         .style("stroke-dasharray", "1");
 
+      var bridgestopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/bridges.json", 'utf8'));
+      var bridgesgeo = topojson.feature(bridgestopo, bridgestopo.objects['bridges']);
+      svg.selectAll(".bridge") // selects path elements, will make them if they don't exist
+        .data(bridgesgeo.features) // iterates over geo feature
+        .enter() // adds feature if it doesn't exist as an element
+        .append("path") // defines element as a path
+        .attr("class", function(d){ return "bridge " + d.properties.linearid; })
+        .style("stroke", "#ddd")
+        .style("stroke-width","0.5")
+        .style("fill", "none")
+        .attr("d", path) // path generator translates geo data to SVG
+
       var nycstufftopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nyc_parks_airports.json", 'utf8'));
       var nycstuffgeo = topojson.feature(nycstufftopo, nycstufftopo.objects['nyc_parks_airports']);
       svg.selectAll(".nycstuff") // selects path elements, will make them if they don't exist
@@ -137,7 +155,7 @@ connection.query(query, function(err, rows, fields) {
         .enter() // adds feature if it doesn't exist as an element
         .append("path") // defines element as a path
         .attr("class", function(d){ return "nycstuff " + d.properties["ntaname"]; })
-        .style("fill", function(d){ return d.properties.ntaname == "Airport" ? "#ffcccc" : "#006400"; })
+        .style("fill", function(d){ return d.properties.ntaname == "Airport" ? "#ffcccc" : "#339933"; })
         .attr("d", path) // path generator translates geo data to SVG
       var airportstopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/airports.json", 'utf8'));
       var airportsgeo = topojson.feature(airportstopo, airportstopo.objects['airports']);
@@ -148,7 +166,6 @@ connection.query(query, function(err, rows, fields) {
         .attr("class", function(d){ return "airport " + d.properties["LOCID"]; })
         .style("stroke", "#fff")
         .attr("d", path) // path generator translates geo data to SVG
-
 
       svg.selectAll('marker.airplane.start')
         .data(linestring_template.features)
@@ -203,7 +220,7 @@ connection.query(query, function(err, rows, fields) {
         .append("text")
           .attr("class", "airplane-label end")
           .attr("transform", function(d) { return "translate(" + end_projected_coords + ")"; })
-          .text(function(d) { return input.toUpperCase() + " " + this_trajectory_rows[this_trajectory_rows.length-1].generated_datetime.toISOString().replace("T", " ").slice(0,16);} );
+          .text(function(d) { return input.toUpperCase() + " " + this_trajectory_rows[this_trajectory_rows.length-1].datetz.toISOString().replace("T", " ").slice(0,16);} );
 
       var start_projected_coords = projection([this_trajectory_rows[0].lon, this_trajectory_rows[0].lat]);
       start_projected_coords[0] = start_projected_coords[0] + 10; // translate the label start 10px to the right.
@@ -213,7 +230,7 @@ connection.query(query, function(err, rows, fields) {
         .append("text")
           .attr("class", "airplane-label start")
           .attr("transform", function(d) { return "translate(" + start_projected_coords + ")"; })
-          .text(function(d) { return input.toUpperCase() + " " + this_trajectory_rows[0].generated_datetime.toISOString().replace("T", " ").slice(0,16);} );
+          .text(function(d) { return input.toUpperCase() + " " + this_trajectory_rows[0].datetz.toISOString().replace("T", " ").slice(0,16);} );
 
         // stupidly, the D3 script tag is left in the generated SVG, so we have to remove it.
         fs.writeFileSync(output_fn, window.d3.select("body").html().replace(/\<script[^<]*\<\/script\>/, ''));
