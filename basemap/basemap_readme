@@ -12,3 +12,7 @@ counties (get NY, NJ, CT, then replace the Census's NYC counties with NYBB from 
 
 major streets/parks in NYC
 airports
+
+TODO: add this to the D3 shapefile, to the node script
+hudson river
+http://cugir.mannlib.cornell.edu/bucketinfo.jsp?id=7888
