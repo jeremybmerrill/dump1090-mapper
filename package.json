@@ -1,5 +1,5 @@
 {
-  "name": "planemaps",
+  "name": "dump1090-mapper",
   "version": "1.0.0",
   "description": "turn your database of planes into some maps, if you want",
   "main": "mapify.js",
@@ -9,7 +9,8 @@
     "underscore": "^1.8.3",
     "topojson": "^1.6.26",
     "mysql":    "^2.10.2",
-    "jsdom":    "^9.2.1"
+    "jsdom":    "^9.2.1",
+    "geojson-utils": "^1.1.0"
   },
   "devDependencies": {},
   "scripts": {
