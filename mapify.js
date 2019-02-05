@@ -9,10 +9,15 @@ var topojson = require('topojson');
 var mysql      = require('mysql');
 var fs = require('fs');
 var jsdom = require('jsdom');
+var gju =      require('geojson-utils');
 
 input = process.argv[2]
-input_type = "icao"
+input_type = "icao" // ENHANCEMENT: accept N number queries, translate them into ICAO hexes via FAA database.
+airplane_nice_name = process.argv.length >= 4 ? process.argv[3] : input
 output_fn = input + ".svg"
+output_metadata_fn = input + ".metadata.json" //# [include neighborhood names, start/end times]
+
+var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
 
 var linestring_template = {
       "type": "FeatureCollection",
@@ -32,8 +37,30 @@ var connection = mysql.createConnection({
   password : process.env.MYSQLPASSWORD,
   database : process.env.MYSQLDATABASE || 'dump1090'
 });
+MAX_TIME_DIFFERENCE_BETWEEN_POINTS = process.env.MAXTIMEDIFF || 10 // minutes
 
-var query = "select *, convert_tz(generated_datetime, '+00:00', @@global.time_zone) as datetz from squitters where icao_addr = conv('"+input+"', 16,10) and lat is not null order by generated_datetime desc;";
+
+function time_to_display(datetz){
+  let split = datetz.toLocaleString("en-US", {timeZone: "America/New_York"}).split(", ");
+  let time = split[1];
+  let date = split[0];
+  return time + " " + date;
+}
+
+
+// TODO: My original thought was points should be ordered by time from the aircraft, generated_datetime; and
+//       and whether to tweet should be based on parsed time)
+//       But generated_datetime and logged_datetime differ by 5 hours for squitters from the two sites. Odd!
+//      
+//       output metadata JSON with neighborhood names (removing neighborhoods.js)
+//       DONE. accept an N number and put THAT in the map rather than the hex.
+
+// this query's time handling is funny, I know.
+// we SORT by `generated_time` because that's internally consistent to the aircraft (so points are guaranteed to be in the right order)
+//   (note that aircraft, much like your microwave, frequently don't have the right timezone/DST setting)
+// but we calculate the timestamp for display (`datetz`) based on the time on the ADSB receiver (`parsed_time`)because that's in a controllable time zone.
+//    even if the received timestamps may vary by a few seconds thanks to slightly different system clocks, processing speed, internet speed and general relativity...
+var query = "select *, convert_tz(parsed_time, '+00:00', 'US/Eastern')  as datetz from squitters where icao_addr = conv('"+input+"', 16,10) and lat is not null order by parsed_time desc;";
 console.warn("query: " + query)
 connection.connect();
 connection.query(query, function(err, rows, fields) {
@@ -50,9 +77,8 @@ connection.query(query, function(err, rows, fields) {
   _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
     two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
   })
-  var firstMoreThanAnHourBefore = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 360*1000; });
-  var this_trajectory_rows = rows.slice(0, firstMoreThanAnHourBefore);
-
+  var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_POINTS*1000; });
+  var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);
 
   var this_trajectory_lats = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
   var this_trajectory_lons = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
@@ -68,6 +94,19 @@ connection.query(query, function(err, rows, fields) {
   console.warn(this_trajectory_lons.length + " points");
   console.warn("Lat bounds: " + max_lat +" to " + min_lat  + "; mid: " + mid_lat)
   console.warn("Long bounds: " + max_lon +" to " + min_lon + "; mid: " + mid_lon)
+
+
+  var neighborhood_name_counts = _(this_trajectory_rows).reduce(function(memo, row, idx){ 
+    var nta = _(nyntas).find(function(nta){
+      return gju.pointInPolygon({"type":"Point","coordinates":[row["lon"], row["lat"]]},
+                 nta["geometry"]);
+    });
+    if(nta){
+      memo[nta["properties"]["NTAName"]] = (memo[nta["properties"]["NTAName"]] || 0) + 1;
+    }
+    return memo;
+  }, {});
+  var neighborhood_names = _(Object.keys(neighborhood_name_counts)).chain().sortBy(function(name){ return -neighborhood_name_counts[name] }).reject(function(name){ return name.indexOf("park-cemetery-etc") > -1 }).map(function(name){ return name == "North Side-South Side" ? "Williamsburg" : name.split("-")}).flatten().value()
 
 
   linestring_template["features"][0]["geometry"]["coordinates"] = _(this_trajectory_rows).map(function(row){ return [row["lon"], row["lat"]]}).reverse();
@@ -220,7 +259,7 @@ connection.query(query, function(err, rows, fields) {
         .append("text")
           .attr("class", "airplane-label end")
           .attr("transform", function(d) { return "translate(" + end_projected_coords + ")"; })
-          .text(function(d) { return input.toUpperCase() + " " + this_trajectory_rows[this_trajectory_rows.length-1].datetz.toISOString().replace("T", " ").slice(0,16);} );
+          .text(function(d) { return airplane_nice_name.toUpperCase() + " " + time_to_display(this_trajectory_rows[this_trajectory_rows.length-1].datetz); });
 
       var start_projected_coords = projection([this_trajectory_rows[0].lon, this_trajectory_rows[0].lat]);
       start_projected_coords[0] = start_projected_coords[0] + 10; // translate the label start 10px to the right.
@@ -230,7 +269,7 @@ connection.query(query, function(err, rows, fields) {
         .append("text")
           .attr("class", "airplane-label start")
           .attr("transform", function(d) { return "translate(" + start_projected_coords + ")"; })
-          .text(function(d) { return input.toUpperCase() + " " + this_trajectory_rows[0].datetz.toISOString().replace("T", " ").slice(0,16);} );
+          .text(function(d) { return airplane_nice_name.toUpperCase() + " " +  time_to_display(this_trajectory_rows[0].datetz);} );
 
         // stupidly, the D3 script tag is left in the generated SVG, so we have to remove it.
         fs.writeFileSync(output_fn, window.d3.select("body").html().replace(/\<script[^<]*\<\/script\>/, ''));
@@ -238,6 +277,16 @@ connection.query(query, function(err, rows, fields) {
     });
 
 
+    metadata = {
+      "nabes": neighborhood_names,
+      "end_recd_time": this_trajectory_rows[0].datetz, // time received by ADSB device
+      "start_recd_time": this_trajectory_rows[this_trajectory_rows.length-1].datetz, // time received by ADSB device
+      // "start_ac_time": this_trajectory_rows[0].datetz, // time generated by aircraft (often off by hours due to DST/timezone settings, like a microwave)
+      // "end_ac_time":  this_trajectory_rows[this_trajectory_rows.length-1].datetz, // time generated by aircraft (often off by hours due to DST/timezone settings, like a microwave)
+      "points_cnt": this_trajectory_rows.length
+    }
+
+    fs.writeFileSync(output_metadata_fn, JSON.stringify(metadata))
       
 
 });
