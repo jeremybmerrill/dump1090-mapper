@@ -1,5 +1,6 @@
 *.svg
 *.png
+*.metadata.json
 *.zip
 MASTER.txt
 node_modules

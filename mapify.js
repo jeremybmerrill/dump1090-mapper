@@ -19,17 +19,6 @@ output_metadata_fn = input + ".metadata.json" //# [include neighborhood names, s
 
 var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
 
-var linestring_template = {
-      "type": "FeatureCollection",
-      "features": [{
-        "type": "Feature",
-        "properties": {},
-        "geometry": {
-          "type": "LineString"
-        }
-      }]
-}
-
 var connection = mysql.createConnection({
   host     : process.env.MYSQLHOST,
   port     : process.env.MYSQLPORT,
@@ -37,8 +26,8 @@ var connection = mysql.createConnection({
   password : process.env.MYSQLPASSWORD,
   database : process.env.MYSQLDATABASE || 'dump1090'
 });
-MAX_TIME_DIFFERENCE_BETWEEN_POINTS = process.env.MAXTIMEDIFF || 10 // minutes
-
+MAX_TIME_DIFFERENCE_BETWEEN_TRAJECTORIES = process.env.MAXTIMEDIFF || 10 // minutes
+MAX_UNMARKED_INTERPOLATION_SECS = 60 * 1000// milliseconds; how long between points to connect with a solid versus dotted line
 
 function time_to_display(datetz){
   let split = datetz.toLocaleString("en-US", {timeZone: "America/New_York"}).split(", ");
@@ -77,7 +66,7 @@ connection.query(query, function(err, rows, fields) {
   _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
     two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
   })
-  var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_POINTS*1000; });
+  var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_TRAJECTORIES*1000; });
   var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);
 
   var this_trajectory_lats = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
@@ -109,7 +98,41 @@ connection.query(query, function(err, rows, fields) {
   var neighborhood_names = _(Object.keys(neighborhood_name_counts)).chain().sortBy(function(name){ return -neighborhood_name_counts[name] }).reject(function(name){ return name.indexOf("park-cemetery-etc") > -1 }).map(function(name){ return name == "North Side-South Side" ? "Williamsburg" : name.split("-")}).flatten().value()
 
 
-  linestring_template["features"][0]["geometry"]["coordinates"] = _(this_trajectory_rows).map(function(row){ return [row["lon"], row["lat"]]}).reverse();
+  // create a list of sub-trajectories grouped either into those whose constituent points are 
+  //  - separated by under MAX_UNMARKED_INTERPOLATION_SECS (e.g. 30 secs)
+  //  - separated by more
+  // so that those separated by more can be marked with a dashed line to signal interpolation.
+  var this_trajectory_rows_grouped = _(this_trajectory_rows).reduce(function(memo, row, idx){
+    if(memo.length == 0){
+      return [[row]];
+    }
+    if(row.timediff > MAX_UNMARKED_INTERPOLATION_SECS ){
+      memo.push([memo[memo.length - 1][memo[memo.length - 1].length - 1], row]) // the interpolated group
+      memo.push([row])  // a new group
+    }else{
+      memo[memo.length - 1].push(row)
+    }
+    return memo;
+  }, [])
+
+  let features = this_trajectory_rows_grouped.map(function(grouped_rows){
+    return {
+        "type": "Feature",
+        "properties": {
+          "interpolated": grouped_rows.length == 2 && grouped_rows[1].timediff > MAX_UNMARKED_INTERPOLATION_SECS
+        },
+        "geometry": {
+          "type": "LineString",
+          "coordinates":  grouped_rows.map(function(row){ return [row["lon"], row["lat"]] }).reverse()
+        }
+    }
+  })
+
+  // linestring["features"][0]["geometry"]["coordinates"] = _(this_trajectory_rows).map(function(row){ return [row["lon"], row["lat"]]}).reverse();
+  linestring = {
+      "type": "FeatureCollection",
+  }
+  linestring["features"] = features;
 
   jsdom.env({
           html: "<html><head></head><body></body></html>",
@@ -139,6 +162,14 @@ connection.query(query, function(err, rows, fields) {
         .projection(projection);
 
       window.d3.select("body").style("background-color", "#e6f2ff");
+
+// .solid{
+//    stroke:solid;
+// }
+
+// .dashed{
+//    stroke-dasharray: 5,5; 
+// }
 
       var svg = window.d3.select("body").append("svg")
           .attr("width", width)
@@ -206,8 +237,9 @@ connection.query(query, function(err, rows, fields) {
         .style("stroke", "#fff")
         .attr("d", path) // path generator translates geo data to SVG
 
+
       svg.selectAll('marker.airplane.start')
-        .data(linestring_template.features)
+        .data([0]) // we're just defining this marker, data here doesn't matter
         .enter()
         .append('svg:marker')
           .attr('id', "marker-airplane-start")
@@ -217,12 +249,12 @@ connection.query(query, function(err, rows, fields) {
           .attr('orient', 'auto')
           .attr('refX', 0)
           .attr('refY', 0)
-          .attr('viewBox', function(d){ return '-8 -5 16 10' })
+          .attr('viewBox', '-8 -5 16 10' )
           .append('svg:path')
-            .attr('d', function(d){ return 'M 0,0 m -8,-5 L 8,0 L -8,5 Z' })
+            .attr('d', 'M 0,0 m -8,-5 L 8,0 L -8,5 Z' )
             .attr('fill', '#f00');
       svg.selectAll('marker.airplane.end')
-        .data(linestring_template.features)
+        .data([0]) // we're just defining this marker, data here doesn't matter
         .enter()
         .append('svg:marker')
           .attr('id', "marker-airplane-end")
@@ -232,29 +264,31 @@ connection.query(query, function(err, rows, fields) {
           .attr('orient', 'auto')
           .attr('refX', 0)
           .attr('refY', 0)
-          .attr('viewBox', function(d){ return '-8 -5 16 10' })
+          .attr('viewBox', '-8 -5 16 10' )
           .append('svg:path')
-            .attr('d', function(d){ return 'M 0,0 m -8,-5 L 8,0 L -8,5 Z' })
+            .attr('d', 'M 0,0 m -8,-5 L 8,0 L -8,5 Z' )
             .attr('fill', '#f00');
 
+      const util = require('util')
 
       svg.selectAll(".airplane") // selects path elements, will make them if they don't exist
-        .data(linestring_template.features) // iterates over geo feature
+        .data(linestring.features) // iterates over geo feature
         .enter() // adds feature if it doesn't exist as an element
         .append("path") // defines element as a path
-        .attr("class", function(d){ return "airplane " + input; })
-        .attr("id", function(d, i){ return "airplane-i"})
-        .style("stroke", "#f00")
+        .attr("class", function(d){ return "airplane " + input + (d.properties.interpolated ? ' interp' : ''); })
+        .attr("id", function(d, i){ return "airplane-" + i.toString() })
+        .style("stroke", function(d){ return d.properties.interpolated ? "#ef6e17" : "#f00" })
+        .style("stroke-dasharray", function(d){ return d.properties.interpolated ? "5,5" : "none" })
         .style("fill", "none")
         .attr("d", path) // path generator translates geo data to SVG
-        .attr('marker-start', function(d,i){ return 'url(#marker-airplane-end)' }) // this reversal is on purpose
-        .attr('marker-end', function(d,i){ return 'url(#marker-airplane-start)' }) // this reversal is on purpose
+        .attr('marker-start', function(d,i){ return (i == linestring.features.length - 1) ? 'url(#marker-airplane-end)' : 'none' }) // this reversal is on purpose
+        .attr('marker-end', function(d,i){ return (i == 0) ? 'url(#marker-airplane-start)' : 'none' }) // this reversal is on purpose
 
       // label the start and end points of the trajectory.
       var end_projected_coords = projection([this_trajectory_rows[this_trajectory_rows.length-1].lon, this_trajectory_rows[this_trajectory_rows.length-1].lat]);
       end_projected_coords[0] = end_projected_coords[0] + 10; // translate the label start 10px to the right.
       svg.selectAll("text.airplane-label.end")
-        .data(linestring_template.features)
+        .data([0])
         .enter()
         .append("text")
           .attr("class", "airplane-label end")
@@ -264,7 +298,7 @@ connection.query(query, function(err, rows, fields) {
       var start_projected_coords = projection([this_trajectory_rows[0].lon, this_trajectory_rows[0].lat]);
       start_projected_coords[0] = start_projected_coords[0] + 10; // translate the label start 10px to the right.
       svg.selectAll("text.airplane-label.start")
-        .data(linestring_template.features)
+        .data([0])
         .enter()
         .append("text")
           .attr("class", "airplane-label start")
@@ -283,7 +317,10 @@ connection.query(query, function(err, rows, fields) {
       "start_recd_time": this_trajectory_rows[this_trajectory_rows.length-1].datetz, // time received by ADSB device
       // "start_ac_time": this_trajectory_rows[0].datetz, // time generated by aircraft (often off by hours due to DST/timezone settings, like a microwave)
       // "end_ac_time":  this_trajectory_rows[this_trajectory_rows.length-1].datetz, // time generated by aircraft (often off by hours due to DST/timezone settings, like a microwave)
-      "points_cnt": this_trajectory_rows.length
+      "points_cnt": this_trajectory_rows.length,
+      "groups_cnt": this_trajectory_rows_grouped.length,
+      "hovering_proba": 0, // TK
+      "hovering_centerpoint": "TK" // TK
     }
 
     fs.writeFileSync(output_metadata_fn, JSON.stringify(metadata))
