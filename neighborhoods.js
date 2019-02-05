@@ -10,8 +10,9 @@ var fs =       require('fs');
 
 input = process.argv[2]
 input_type = "icao"
-output_fn = input + ".svg"
 
+MAX_TIME_DIFFERENCE_BETWEEN_POINTS = process.env.MAXTIMEDIFF || 10 // minutes
+// 
 var connection = mysql.createConnection({
   host     : process.env.MYSQLHOST,
   port     : process.env.MYSQLPORT,
@@ -19,6 +20,8 @@ var connection = mysql.createConnection({
   password : process.env.MYSQLPASSWORD,
   database : process.env.MYSQLDATABASE || 'dump1090'
 });
+
+console.warn("DEPRECATED; see metadata output file from mapify.js")
 
 var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
 var query = "select * from squitters where icao_addr = conv('"+input+"', 16,10) and lat is not null order by generated_datetime desc;";
@@ -38,8 +41,8 @@ connection.query(query, function(err, rows, fields) {
   _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
     two_rows[1]["timediff"] = two_rows[0].generated_datetime - two_rows[1].generated_datetime;
   })
-  var firstMoreThanAnHourBefore = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 360*1000; });
-  var this_trajectory_rows = rows.slice(0, firstMoreThanAnHourBefore);
+  var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_POINTS*1000; });
+  var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);
 
   var neighborhood_name_counts = _(this_trajectory_rows).reduce(function(memo, row, idx){ 
     var nta = _(nyntas).find(function(nta){
@@ -53,5 +56,10 @@ connection.query(query, function(err, rows, fields) {
   }, {});
   var neighborhood_names = _(Object.keys(neighborhood_name_counts)).chain().sortBy(function(name){ return -neighborhood_name_counts[name] }).reject(function(name){ return name.indexOf("park-cemetery-etc") > -1 }).map(function(name){ return name == "North Side-South Side" ? "Williamsburg" : name.split("-")}).flatten().value()
   console.log(neighborhood_names.join("|"));
+
+  // {
+  //   "nabes": neighborhood_names.join("|"),
+
+  // }
   });
 connection.end();
