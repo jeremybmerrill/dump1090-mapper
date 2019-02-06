@@ -31,9 +31,16 @@ MAX_UNMARKED_INTERPOLATION_SECS = 60 * 1000// milliseconds; how long between poi
 
 function time_to_display(datetz){
   let split = datetz.toLocaleString("en-US", {timeZone: "America/New_York"}).split(", ");
-  let time = split[1];
+  let timeChars = split[1].split('');
+  timeChars.reverse();
+  let revMeridian = timeChars.slice(0, 2);
+  revMeridian.reverse();
+  let meridian = revMeridian.join('');
+  let revhhmm = timeChars.slice(6);
+  revhhmm.reverse();
+  let hhmm = revhhmm.join('');
   let date = split[0];
-  return time + " " + date;
+  return hhmm + " " + meridian + " " + date;
 }
 
 
