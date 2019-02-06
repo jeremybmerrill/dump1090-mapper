@@ -245,13 +245,14 @@ connection.query(query, function(err, rows, fields) {
         .attr("d", path) // path generator translates geo data to SVG
 
 
+      let strokeWidth = 2;
       svg.selectAll('marker.airplane.start')
         .data([0]) // we're just defining this marker, data here doesn't matter
         .enter()
         .append('svg:marker')
           .attr('id', "marker-airplane-start")
-          .attr('markerHeight', 15)
-          .attr('markerWidth', 15)
+          .attr('markerHeight', 15.0/strokeWidth)
+          .attr('markerWidth', 15.0/strokeWidth)
           .attr('markerUnits', 'strokeWidth')
           .attr('orient', 'auto')
           .attr('refX', 0)
@@ -265,8 +266,8 @@ connection.query(query, function(err, rows, fields) {
         .enter()
         .append('svg:marker')
           .attr('id', "marker-airplane-end")
-          .attr('markerHeight', 15)
-          .attr('markerWidth', 15)
+          .attr('markerHeight', 15.0/strokeWidth)
+          .attr('markerWidth', 15.0/strokeWidth)
           .attr('markerUnits', 'strokeWidth')
           .attr('orient', 'auto')
           .attr('refX', 0)
@@ -285,6 +286,7 @@ connection.query(query, function(err, rows, fields) {
         .attr("class", function(d){ return "airplane " + input + (d.properties.interpolated ? ' interp' : ''); })
         .attr("id", function(d, i){ return "airplane-" + i.toString() })
         .style("stroke", function(d){ return d.properties.interpolated ? "#ef6e17" : "#f00" })
+        .style("stroke-width", strokeWidth)
         .style("stroke-dasharray", function(d){ return d.properties.interpolated ? "5,5" : "none" })
         .style("fill", "none")
         .attr("d", path) // path generator translates geo data to SVG
