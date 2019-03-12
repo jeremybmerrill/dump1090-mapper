@@ -14,10 +14,21 @@ var gju =      require('geojson-utils');
 input = process.argv[2]
 input_type = "icao" // ENHANCEMENT: accept N number queries, translate them into ICAO hexes via FAA database.
 airplane_nice_name = process.argv.length >= 4 ? process.argv[3] : input
-output_fn = input + ".svg"
-output_metadata_fn = input + ".metadata.json" //# [include neighborhood names, start/end times]
+output_fn = airplane_nice_name + ".svg"
+output_metadata_fn = airplane_nice_name + ".metadata.json" //# [include neighborhood names, start/end times]
+
+// I should probably invest in a cli args parser!
+if (process.argv.length >= 6){
+  trajectory_start_time = process.argv[4] // in mysql format, plz! -- and in UTC
+  trajectory_end_time = process.argv[5] // in mysql format, plz!  -- and in UTC
+}else{
+  trajectory_start_time = null
+  trajectory_end_time = null 
+}
 
 var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
+
+console.log(process.env)
 
 var connection = mysql.createConnection({
   host     : process.env.MYSQLHOST,
@@ -44,38 +55,7 @@ function time_to_display(datetz){
 }
 
 
-// TODO: My original thought was points should be ordered by time from the aircraft, generated_datetime; and
-//       and whether to tweet should be based on parsed time)
-//       But generated_datetime and logged_datetime differ by 5 hours for squitters from the two sites. Odd!
-//      
-//       output metadata JSON with neighborhood names (removing neighborhoods.js)
-//       DONE. accept an N number and put THAT in the map rather than the hex.
-
-// this query's time handling is funny, I know.
-// we SORT by `generated_time` because that's internally consistent to the aircraft (so points are guaranteed to be in the right order)
-//   (note that aircraft, much like your microwave, frequently don't have the right timezone/DST setting)
-// but we calculate the timestamp for display (`datetz`) based on the time on the ADSB receiver (`parsed_time`)because that's in a controllable time zone.
-//    even if the received timestamps may vary by a few seconds thanks to slightly different system clocks, processing speed, internet speed and general relativity...
-var query = "select *, convert_tz(parsed_time, '+00:00', 'US/Eastern')  as datetz from squitters where icao_addr = conv('"+input+"', 16,10) and lat is not null order by parsed_time desc;";
-console.warn("query: " + query)
-connection.connect();
-connection.query(query, function(err, rows, fields) {
-  if (err) throw err;
-
-  var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
-  var lons = _(rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
-
-  if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
-    console.log("no geo data found for " + input)
-    throw "no geo data found for " + input;
-  } 
-
-  _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
-    two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
-  })
-  var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_TRAJECTORIES*1000; });
-  var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);
-
+function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
   var this_trajectory_lats = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
   var this_trajectory_lons = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
   var max_lat = Math.max.apply(null, this_trajectory_lats);
@@ -92,35 +72,6 @@ connection.query(query, function(err, rows, fields) {
   console.warn("Long bounds: " + max_lon +" to " + min_lon + "; mid: " + mid_lon)
 
 
-  var neighborhood_name_counts = _(this_trajectory_rows).reduce(function(memo, row, idx){ 
-    var nta = _(nyntas).find(function(nta){
-      return gju.pointInPolygon({"type":"Point","coordinates":[row["lon"], row["lat"]]},
-                 nta["geometry"]);
-    });
-    if(nta){
-      memo[nta["properties"]["NTAName"]] = (memo[nta["properties"]["NTAName"]] || 0) + 1;
-    }
-    return memo;
-  }, {});
-  var neighborhood_names = _(Object.keys(neighborhood_name_counts)).chain().sortBy(function(name){ return -neighborhood_name_counts[name] }).reject(function(name){ return name.indexOf("park-cemetery-etc") > -1 }).map(function(name){ return name == "North Side-South Side" ? "Williamsburg" : name.split("-")}).flatten().value()
-
-
-  // create a list of sub-trajectories grouped either into those whose constituent points are 
-  //  - separated by under MAX_UNMARKED_INTERPOLATION_SECS (e.g. 30 secs)
-  //  - separated by more
-  // so that those separated by more can be marked with a dashed line to signal interpolation.
-  var this_trajectory_rows_grouped = _(this_trajectory_rows).reduce(function(memo, row, idx){
-    if(memo.length == 0){
-      return [[row]];
-    }
-    if(row.timediff > MAX_UNMARKED_INTERPOLATION_SECS ){
-      memo.push([memo[memo.length - 1][memo[memo.length - 1].length - 1], row]) // the interpolated group
-      memo.push([row])  // a new group
-    }else{
-      memo[memo.length - 1].push(row)
-    }
-    return memo;
-  }, [])
 
   let features = this_trajectory_rows_grouped.map(function(grouped_rows){
     return {
@@ -313,14 +264,31 @@ connection.query(query, function(err, rows, fields) {
           .attr("class", "airplane-label start")
           .attr("transform", function(d) { return "translate(" + start_projected_coords + ")"; })
           .text(function(d) { return airplane_nice_name.toUpperCase() + " " +  time_to_display(this_trajectory_rows[0].datetz);} );
+      // stupidly, the D3 script tag is left in the generated SVG, so we have to remove it.
+      cb( window.d3.select("body").html().replace(/\<script[^<]*\<\/script\>/, '') );
 
-        // stupidly, the D3 script tag is left in the generated SVG, so we have to remove it.
-        fs.writeFileSync(output_fn, window.d3.select("body").html().replace(/\<script[^<]*\<\/script\>/, ''));
-      }
+    }
+  });
+}
+
+function neighborhoodNamesForPoints(this_trajectory_rows){
+  var neighborhood_name_counts = _(this_trajectory_rows).reduce(function(memo, row, idx){ 
+    var nta = _(nyntas).find(function(nta){
+      return gju.pointInPolygon({"type":"Point","coordinates":[row["lon"], row["lat"]]},
+                 nta["geometry"]);
     });
+    if(nta){
+      memo[nta["properties"]["NTAName"]] = (memo[nta["properties"]["NTAName"]] || 0) + 1;
+    }
+    return memo;
+  }, {});
+  var neighborhood_names = _(Object.keys(neighborhood_name_counts)).chain().sortBy(function(name){ return -neighborhood_name_counts[name] }).reject(function(name){ return name.indexOf("park-cemetery-etc") > -1 }).map(function(name){ return name == "North Side-South Side" ? "Williamsburg" : name.split("-")}).flatten().value()
+  return neighborhood_names
+}
 
-
-    metadata = {
+function metadataForPoints(this_trajectory_rows, this_trajectory_rows_grouped){
+  neighborhood_names = neighborhoodNamesForPoints(this_trajectory_rows)
+  return {
       "nabes": neighborhood_names,
       "end_recd_time": this_trajectory_rows[0].datetz, // time received by ADSB device
       "start_recd_time": this_trajectory_rows[this_trajectory_rows.length-1].datetz, // time received by ADSB device
@@ -331,11 +299,108 @@ connection.query(query, function(err, rows, fields) {
       "hovering_proba": 0, // TK
       "hovering_centerpoint": "TK" // TK
     }
+}
 
-    fs.writeFileSync(output_metadata_fn, JSON.stringify(metadata))
-      
+function writeMapAndMetadataForTrajectory(this_trajectory_rows){
 
-});
-connection.end();
 
-console.log(output_fn)
+  // create a list of sub-trajectories grouped either into those whose constituent points are 
+  //  - separated by under MAX_UNMARKED_INTERPOLATION_SECS (e.g. 30 secs)
+  //  - separated by more
+  // so that those separated by more can be marked with a dashed line to signal interpolation.
+  var this_trajectory_rows_grouped = _(this_trajectory_rows).reduce(function(memo, row, idx){
+    if(memo.length == 0){
+      return [[row]];
+    }
+    if(row.timediff > MAX_UNMARKED_INTERPOLATION_SECS ){
+      memo.push([memo[memo.length - 1][memo[memo.length - 1].length - 1], row]) // the interpolated group
+      memo.push([row])  // a new group
+    }else{
+      memo[memo.length - 1].push(row)
+    }
+    return memo;
+  }, [])
+
+  mapPoints(this_trajectory_rows,this_trajectory_rows_grouped, (html) => {
+    fs.writeFileSync(output_fn, html);
+  })
+
+  metadata = metadataForPoints(this_trajectory_rows, this_trajectory_rows_grouped)
+  fs.writeFileSync(output_metadata_fn, JSON.stringify(metadata))
+}
+
+// TODO: My original thought was points should be ordered by time from the aircraft, generated_datetime; and
+//       and whether to tweet should be based on parsed time)
+//       But generated_datetime and logged_datetime differ by 5 hours for squitters from the two sites. Odd!
+//      
+//       output metadata JSON with neighborhood names (removing neighborhoods.js)
+//       DONE. accept an N number and put THAT in the map rather than the hex.
+
+
+// if the third and fourth CLI args are provided, that's the temporal "bounds" of the trajectory
+// as a strt and end time, so we don't have to find breaks.
+if (trajectory_start_time && trajectory_end_time){
+  var query = `
+    select *, convert_tz(parsed_time, '+00:00', 'US/Eastern') as datetz 
+    from squitters 
+    where icao_addr = conv('${input}', 16,10) 
+      and lat is not null 
+      and parsed_time <= '${trajectory_end_time}' and parsed_time >= '${trajectory_start_time}'
+    order by parsed_time desc;
+  `;
+  console.warn("query: " + query)
+  connection.connect();
+  connection.query(query, function(err, rows, fields) {
+    if (err) throw err;
+
+    var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
+
+    if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
+      console.log("no geo data found for " + input)
+      throw "no geo data found for " + input;
+    } 
+
+    _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
+      two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
+    })
+
+    writeMapAndMetadataForTrajectory(rows);
+  });
+  connection.end();
+  console.log(output_fn)
+}else{ // for generating 
+  // this query's time handling is funny, I know.
+  // we SORT by `generated_time` because that's internally consistent to the aircraft (so points are guaranteed to be in the right order)
+  //   (note that aircraft, much like your microwave, frequently don't have the right timezone/DST setting)
+  // but we calculate the timestamp for display (`datetz`) based on the time on the ADSB receiver (`parsed_time`)because that's in a controllable time zone.
+  //    even if the received timestamps may vary by a few seconds thanks to slightly different system clocks, processing speed, internet speed and general relativity...
+  var query = `
+    select *, convert_tz(parsed_time, '+00:00', 'US/Eastern')  as datetz 
+    from squitters 
+    where icao_addr = conv('${input}', 16,10) 
+      and lat is not null 
+    order by parsed_time desc;
+  `;
+  console.warn("query: " + query)
+  connection.connect();
+  connection.query(query, function(err, rows, fields) {
+    if (err) throw err;
+
+    var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
+    var lons = _(rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
+
+    if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
+      console.log("no geo data found for " + input)
+      throw "no geo data found for " + input;
+    } 
+
+    _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
+      two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
+    })
+    var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_TRAJECTORIES*1000; });
+    var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);
+    writeMapAndMetadataForTrajectory(this_trajectory_rows);
+  });
+  connection.end();
+  console.log(output_fn)
+}
