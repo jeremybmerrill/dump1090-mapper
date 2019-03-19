@@ -70,6 +70,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
   console.warn(this_trajectory_lons.length + " points");
   console.warn("Lat bounds: " + max_lat +" to " + min_lat  + "; mid: " + mid_lat)
   console.warn("Long bounds: " + max_lon +" to " + min_lon + "; mid: " + mid_lon)
+  console.warn("Time: " + this_trajectory_rows[0]["generated_datetime"] + " to " + this_trajectory_rows[this_trajectory_rows.length - 1]["generated_datetime"])
 
 
 
@@ -331,10 +332,26 @@ function writeMapAndMetadataForTrajectory(this_trajectory_rows){
 
 // TODO: My original thought was points should be ordered by time from the aircraft, generated_datetime; and
 //       and whether to tweet should be based on parsed time)
-//       But generated_datetime and logged_datetime differ by 5 hours for squitters from the two sites. Odd!
+//       But generated_datetime and logged_datetime differ (from parsed_time) by 5 hours for squitters from the two sites. Odd!
 //      
-//       output metadata JSON with neighborhood names (removing neighborhoods.js)
-//       DONE. accept an N number and put THAT in the map rather than the hex.
+//       I think we have to do something more complicated, otherwise you end up with stuff like this
+//       https://twitter.com/nypdhelicopters/status/1097569009455845376 due to generated_time being the right order
+//       and parsed_time being the wrong order (but guaranteed right hour). (node mapify.js ACB1F5 N917PD '2019-02-18 18:40:17' '2019-02-18 18:43:11')
+//     
+//       An example of having multiple sites with mis-ordered generated_time is... TK
+//       
+//       Proposed solution is to calculate the difference in hours between the sites and 'correct' generated_datetime that way.
+function sortRowsByCorrectedTime(rows){
+  var rows_by_client = _(rows).groupBy(function(row){ return row["client_id"]});
+  var any_time_by_client = _(Object.keys(rows_by_client)).reduce(function(acc, client_id){ acc.push([client_id, rows_by_client[client_id][0]['generated_datetime']]); return acc}, [])
+  var first_client = any_time_by_client.pop()
+  var hour_differences = _(any_time_by_client).reduce(function(acc, client_id_time){ acc.push([client_id_time[0], Math.round((Date.parse(client_id_time[1]) - Date.parse(first_client[1])) / 1000 / 60 / 60) ]); return acc }, [[first_client[0], 0]])
+  hour_differences = hour_differences.reduce(function(acc, cur){ acc[cur[0]] = cur[1]; return acc}  , {})
+
+  // e.g. {0: 0, 1: -4} to show that client 1 has a relative time difference of -4 hours from client ID zero.
+
+  return _(rows).sortBy(function(row){ return -(Date.parse(row["generated_datetime"]) - (1000 * 60 * 60 * hour_differences[row["client_id"]])) })
+}
 
 
 // if the third and fourth CLI args are provided, that's the temporal "bounds" of the trajectory
@@ -352,6 +369,8 @@ if (trajectory_start_time && trajectory_end_time){
   connection.connect();
   connection.query(query, function(err, rows, fields) {
     if (err) throw err;
+
+    rows = sortRowsByCorrectedTime(rows);
 
     var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
 
@@ -393,6 +412,12 @@ if (trajectory_start_time && trajectory_end_time){
       console.log("no geo data found for " + input)
       throw "no geo data found for " + input;
     } 
+
+
+    rows = sortRowsByCorrectedTime(rows);
+
+    var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
+
 
     _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
       two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
