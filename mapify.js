@@ -28,8 +28,6 @@ if (process.argv.length >= 6){
 
 var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
 
-console.log(process.env)
-
 var connection = mysql.createConnection({
   host     : process.env.MYSQLHOST,
   port     : process.env.MYSQLPORT,
@@ -345,12 +343,14 @@ function sortRowsByCorrectedTime(rows){
   var rows_by_client = _(rows).groupBy(function(row){ return row["client_id"]});
   var any_time_by_client = _(Object.keys(rows_by_client)).reduce(function(acc, client_id){ acc.push([client_id, rows_by_client[client_id][0]['generated_datetime']]); return acc}, [])
   var first_client = any_time_by_client.pop()
-  var hour_differences = _(any_time_by_client).reduce(function(acc, client_id_time){ acc.push([client_id_time[0], Math.round((Date.parse(client_id_time[1]) - Date.parse(first_client[1])) / 1000 / 60 / 60) ]); return acc }, [[first_client[0], 0]])
+  // if the difference is 50+ minutes, it's an hour difference. Less than that, we assume it's because we're comparing points that were legitimately seen at different times.
+  var hour_differences = _(any_time_by_client).reduce(function(acc, client_id_time){ acc.push([client_id_time[0], Math.floor((Date.parse(client_id_time[1]) - Date.parse(first_client[1]) + 1000 * 60 * 10) / 1000 / 60 / 60) ]); return acc }, [[first_client[0], 0]])
   hour_differences = hour_differences.reduce(function(acc, cur){ acc[cur[0]] = cur[1]; return acc}  , {})
 
   // e.g. {0: 0, 1: -4} to show that client 1 has a relative time difference of -4 hours from client ID zero.
+  _(rows).each(function(row){ row["corrected_time"] = Date.parse(row["generated_datetime"]) - (1000 * 60 * 60 * hour_differences[row["client_id"]]); })
 
-  return _(rows).sortBy(function(row){ return -(Date.parse(row["generated_datetime"]) - (1000 * 60 * 60 * hour_differences[row["client_id"]])) })
+  return _(rows).sortBy(function(row){ return -(row["corrected_time"]) })
 }
 
 
@@ -372,6 +372,8 @@ if (trajectory_start_time && trajectory_end_time){
 
     rows = sortRowsByCorrectedTime(rows);
 
+    // _(rows).each(function(row){ console.log(row["datetz"], row["client_id"], new Date(row["corrected_time"])); })
+
     var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
 
     if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
@@ -380,14 +382,14 @@ if (trajectory_start_time && trajectory_end_time){
     } 
 
     _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
-      two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
+      two_rows[1]["timediff"] = two_rows[0].corrected_time - two_rows[1].corrected_time;
     })
 
     writeMapAndMetadataForTrajectory(rows);
   });
   connection.end();
   console.log(output_fn)
-}else{ // for generating 
+}else{ // for generating via nypdcopterbot.rb
   // this query's time handling is funny, I know.
   // we SORT by `generated_time` because that's internally consistent to the aircraft (so points are guaranteed to be in the right order)
   //   (note that aircraft, much like your microwave, frequently don't have the right timezone/DST setting)
@@ -406,7 +408,6 @@ if (trajectory_start_time && trajectory_end_time){
     if (err) throw err;
 
     var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
-    var lons = _(rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
 
     if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
       console.log("no geo data found for " + input)
@@ -414,16 +415,12 @@ if (trajectory_start_time && trajectory_end_time){
     } 
 
 
-    rows = sortRowsByCorrectedTime(rows);
-
-    var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
-
-
     _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
-      two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
+      two_rows[1]["timediff"] = two_rows[0].corrected_time - two_rows[1].corrected_time;
     })
     var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_TRAJECTORIES*1000; });
     var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);
+    var this_trajectory_rows = sortRowsByCorrectedTime(this_trajectory_rows);
     writeMapAndMetadataForTrajectory(this_trajectory_rows);
   });
   connection.end();
