@@ -5,11 +5,13 @@
 var d3 = require('d3');
 var _ = require('underscore');
 var async = require('async');
-var topojson = require('topojson');
+var topojson = require('topojson-client');
 var mysql      = require('mysql');
 var fs = require('fs');
 var jsdom = require('jsdom');
 var gju =      require('geojson-utils');
+require('d3-geo');
+require("d3-geo-projection");
 
 input = process.argv[2]
 input_type = "icao" // ENHANCEMENT: accept N number queries, translate them into ICAO hexes via FAA database.
@@ -94,7 +96,9 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
   jsdom.env({
           html: "<html><head></head><body></body></html>",
           scripts: [
-            __dirname + '/node_modules/d3/d3.min.js'
+            __dirname + '/node_modules/d3/build/d3.min.js',
+            __dirname + '/node_modules/d3-geo/build/d3-geo.min.js',
+            __dirname + '/node_modules/d3-geo-projection/dist/d3-geo-projection.min.js'
           ],
           done:
     function (err, window) {
@@ -108,14 +112,15 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
       // my receiver has a so, a range of 1.48 lat and 1.87 lon
 
 
-      var projection = window.d3.geo.albers()
+      var projection = window.d3.geoAlbers()
         .center([0, mid_lat])      // 41   [0, desired_latitude] 41
         .rotate([-1 * mid_lon, 0]) // 73.5 [-desired_longitude, 0] 
 
         .parallels([29.5,44.5])
         .scale( 32000  / zoom ) // 32000 gets you most of my SDR rnage.
         .translate([width / 2, height / 2]);
-      var path = window.d3.geo.path()
+      var padding = 0
+      var path = window.d3.geoPath()
         .projection(projection);
 
       window.d3.select("body").style("background-color", "#e6f2ff");
@@ -264,7 +269,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
           .attr("transform", function(d) { return "translate(" + start_projected_coords + ")"; })
           .text(function(d) { return airplane_nice_name.toUpperCase() + " " +  time_to_display(this_trajectory_rows[0].datetz);} );
       // stupidly, the D3 script tag is left in the generated SVG, so we have to remove it.
-      cb( window.d3.select("body").html().replace(/\<script[^<]*\<\/script\>/, '') );
+      cb( "<html>" + window.d3.select("html").html().replace(/\<script[^<]*\<\/script\>/, '') + "</html>" );
 
     }
   });
@@ -301,8 +306,6 @@ function metadataForPoints(this_trajectory_rows, this_trajectory_rows_grouped){
 }
 
 function writeMapAndMetadataForTrajectory(this_trajectory_rows){
-
-
   // create a list of sub-trajectories grouped either into those whose constituent points are 
   //  - separated by under MAX_UNMARKED_INTERPOLATION_SECS (e.g. 30 secs)
   //  - separated by more
@@ -340,11 +343,23 @@ function writeMapAndMetadataForTrajectory(this_trajectory_rows){
 //       
 //       Proposed solution is to calculate the difference in hours between the sites and 'correct' generated_datetime that way.
 function sortRowsByCorrectedTime(rows){
-  var rows_by_client = _(rows).groupBy(function(row){ return row["client_id"]});
-  var any_time_by_client = _(Object.keys(rows_by_client)).reduce(function(acc, client_id){ acc.push([client_id, rows_by_client[client_id][0]['generated_datetime']]); return acc}, [])
-  var first_client = any_time_by_client.pop()
+  // var rows_by_client = _(rows).groupBy(function(row){ return row["client_id"]});
+  // var any_time_by_client = _(Object.keys(rows_by_client)).reduce(function(acc, client_id){ acc.push([client_id, rows_by_client[client_id][0]['generated_datetime']]); return acc}, [])
+
+  // this finds a time per client at the time closest to when we have one time from each
+  // so that they *should* be close enough in time to each other that we don't end up an hour off.
+  var unique_client_ids = [...new Set(_(rows).map(function(row){ return row["client_id"]}))]; 
+  var one_time_per_client = Object.entries(_(rows).reduce(function(memo, row){
+    if( _.some(unique_client_ids, function(client_id){ return !memo[client_id] }) ){
+      memo[row["client_id"]] = row["generated_datetime"]
+    }
+    return memo;
+  }, {}))
+
+  console.log(one_time_per_client)
+  var first_client = one_time_per_client.pop()
   // if the difference is 50+ minutes, it's an hour difference. Less than that, we assume it's because we're comparing points that were legitimately seen at different times.
-  var hour_differences = _(any_time_by_client).reduce(function(acc, client_id_time){ acc.push([client_id_time[0], Math.floor((Date.parse(client_id_time[1]) - Date.parse(first_client[1]) + 1000 * 60 * 10) / 1000 / 60 / 60) ]); return acc }, [[first_client[0], 0]])
+  var hour_differences = _(one_time_per_client).reduce(function(acc, client_id_time){ acc.push([client_id_time[0], Math.floor((Date.parse(client_id_time[1]) - Date.parse(first_client[1]) + 1000 * 60 * 10) / 1000 / 60 / 60) ]); return acc }, [[first_client[0], 0]])
   hour_differences = hour_differences.reduce(function(acc, cur){ acc[cur[0]] = cur[1]; return acc}  , {})
 
   // e.g. {0: 0, 1: -4} to show that client 1 has a relative time difference of -4 hours from client ID zero.
@@ -382,7 +397,7 @@ if (trajectory_start_time && trajectory_end_time){
     } 
 
     _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
-      two_rows[1]["timediff"] = two_rows[0].corrected_time - two_rows[1].corrected_time;
+      two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
     })
 
     writeMapAndMetadataForTrajectory(rows);
@@ -416,7 +431,7 @@ if (trajectory_start_time && trajectory_end_time){
 
 
     _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
-      two_rows[1]["timediff"] = two_rows[0].corrected_time - two_rows[1].corrected_time;
+      two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
     })
     var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_TRAJECTORIES*1000; });
     var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);

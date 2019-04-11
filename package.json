@@ -5,11 +5,14 @@
   "main": "mapify.js",
   "dependencies": {
     "async": "^2.0.0-rc.5",
-    "d3": "^3.5.17",
+    "d3": "^4.13.0",
+    "d3-geo-projection": "^2.6.0",
     "geojson-utils": "^1.1.0",
     "jsdom": "^9.2.1",
     "mysql": "^2.10.2",
+    "puppeteer": "^1.12.2",
     "topojson": "^1.6.26",
+    "topojson-client": "^3.0.0",
     "underscore": "^1.8.3"
   },
   "devDependencies": {},
