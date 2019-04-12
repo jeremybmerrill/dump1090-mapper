@@ -5,13 +5,12 @@
 var d3 = require('d3');
 var _ = require('underscore');
 var async = require('async');
-var topojson = require('topojson-client');
+var topojson = require('topojson');
 var mysql      = require('mysql');
 var fs = require('fs');
 var jsdom = require('jsdom');
 var gju =      require('geojson-utils');
-require('d3-geo');
-require("d3-geo-projection");
+var commander = require('commander');
 
 input = process.argv[2]
 input_type = "icao" // ENHANCEMENT: accept N number queries, translate them into ICAO hexes via FAA database.
@@ -27,6 +26,9 @@ if (process.argv.length >= 6){
   trajectory_start_time = null
   trajectory_end_time = null 
 }
+
+
+
 
 var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
 
@@ -55,7 +57,7 @@ function time_to_display(datetz){
 }
 
 
-function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
+function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_background, cb){
   var this_trajectory_lats = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
   var this_trajectory_lons = _(this_trajectory_rows).reduce(function(memo, row){ if(row["lon"]){memo.push(row["lon"])}; return memo; }, [])
   var max_lat = Math.max.apply(null, this_trajectory_lats);
@@ -96,9 +98,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
   jsdom.env({
           html: "<html><head></head><body></body></html>",
           scripts: [
-            __dirname + '/node_modules/d3/build/d3.min.js',
-            __dirname + '/node_modules/d3-geo/build/d3-geo.min.js',
-            __dirname + '/node_modules/d3-geo-projection/dist/d3-geo-projection.min.js'
+            __dirname + '/node_modules/d3/d3.min.js'
           ],
           done:
     function (err, window) {
@@ -112,7 +112,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
       // my receiver has a so, a range of 1.48 lat and 1.87 lon
 
 
-      var projection = window.d3.geoAlbers()
+      var projection = window.d3.geo.albers()
         .center([0, mid_lat])      // 41   [0, desired_latitude] 41
         .rotate([-1 * mid_lon, 0]) // 73.5 [-desired_longitude, 0] 
 
@@ -120,10 +120,10 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
         .scale( 32000  / zoom ) // 32000 gets you most of my SDR rnage.
         .translate([width / 2, height / 2]);
       var padding = 0
-      var path = window.d3.geoPath()
+      var path = window.d3.geo.path()
         .projection(projection);
 
-      window.d3.select("body").style("background-color", "#e6f2ff");
+      window.d3.select("body").style("background-color", "#e6f2ff").style("overflow", "hidden");
 
 // .solid{
 //    stroke:solid;
@@ -144,61 +144,63 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
       // basemap
       var nytopojson = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/counties.json", 'utf8'));
       var nygeojson = topojson.feature(nytopojson, nytopojson.objects['counties']);
-      svg.selectAll(".county") // selects path elements, will make them if they don't exist
-        .data(nygeojson.features) // iterates over geo feature
-        .enter() // adds feature if it doesn't exist as an element
-        .append("path") // defines element as a path
-        .attr("class", function(d) { return "county " + "state"+d.properties["STATEFP"]+ " " +"cty"+d.properties["COUNTYFP"]+ " " + d.properties["NAME"]; })
-        .style("fill", "#ffffca")
-        .style("stroke", "black")
-        .attr("d", path) // path generator translates geo data to SVG
-
-      svg.append("path")
-        .datum(topojson.mesh(nytopojson, nytopojson.objects.counties, function(a, b) { return a !== b && (a.properties.STATEFP || '036') !== ( b.properties.STATEFP || '036'); })) // the five boros have a null STATEFP because they're from a different shapefile.
-        .attr("d", path)
-        .attr("class", "state-boundary")
-        .style("fill", "none")
-        .style("stroke", "black");
-
-      svg.append("path")
-        .datum(topojson.mesh(nytopojson, nytopojson.objects.counties, function(a, b) { return a !== b && (a.properties.STATEFP || '036') === ( b.properties.STATEFP || '036'); })) // the five boros have a null STATEFP because they're from a different shapefile.
-        .attr("d", path)
-        .attr("class", "county-boundary")
-        .style("fill", "none")
-        .style("stroke", "#ccc")
-        .style("stroke-dasharray", "1");
-
-      var bridgestopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/bridges.json", 'utf8'));
-      var bridgesgeo = topojson.feature(bridgestopo, bridgestopo.objects['bridges']);
-      svg.selectAll(".bridge") // selects path elements, will make them if they don't exist
-        .data(bridgesgeo.features) // iterates over geo feature
-        .enter() // adds feature if it doesn't exist as an element
-        .append("path") // defines element as a path
-        .attr("class", function(d){ return "bridge " + d.properties.linearid; })
-        .style("stroke", "#ddd")
-        .style("stroke-width","0.5")
-        .style("fill", "none")
-        .attr("d", path) // path generator translates geo data to SVG
-
-      var nycstufftopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nyc_parks_airports.json", 'utf8'));
-      var nycstuffgeo = topojson.feature(nycstufftopo, nycstufftopo.objects['nyc_parks_airports']);
-      svg.selectAll(".nycstuff") // selects path elements, will make them if they don't exist
-        .data(nycstuffgeo.features) // iterates over geo feature
-        .enter() // adds feature if it doesn't exist as an element
-        .append("path") // defines element as a path
-        .attr("class", function(d){ return "nycstuff " + d.properties["ntaname"]; })
-        .style("fill", function(d){ return d.properties.ntaname == "Airport" ? "#ffcccc" : "#339933"; })
-        .attr("d", path) // path generator translates geo data to SVG
-      var airportstopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/airports.json", 'utf8'));
-      var airportsgeo = topojson.feature(airportstopo, airportstopo.objects['airports']);
-      svg.selectAll(".airport") // selects path elements, will make them if they don't exist
-        .data(airportsgeo.features) // iterates over geo feature
-        .enter() // adds feature if it doesn't exist as an element
-        .append("path") // defines element as a path
-        .attr("class", function(d){ return "airport " + d.properties["LOCID"]; })
-        .style("stroke", "#fff")
-        .attr("d", path) // path generator translates geo data to SVG
-
+      if(include_background){ 
+          svg.selectAll(".county") // selects path elements, will make them if they don't exist
+              .data(nygeojson.features) // iterates over geo feature
+              .enter() // adds feature if it doesn't exist as an element
+              .append("path") // defines element as a path
+              .attr("class", function(d) { return "county " + "state"+d.properties["STATEFP"]+ " " +"cty"+d.properties["COUNTYFP"]+ " " + d.properties["NAME"]; })
+              .style("fill", "#ffffca")
+              .style("stroke", "black")
+              .attr("d", path) // path generator translates geo data to SVG
+  
+  
+          svg.append("path")
+            .datum(topojson.mesh(nytopojson, nytopojson.objects.counties, function(a, b) { return a !== b && (a.properties.STATEFP || '036') !== ( b.properties.STATEFP || '036'); })) // the five boros have a null STATEFP because they're from a different shapefile.
+            .attr("d", path)
+            .attr("class", "state-boundary")
+            .style("fill", "none")
+            .style("stroke", "black");
+  
+          svg.append("path")
+            .datum(topojson.mesh(nytopojson, nytopojson.objects.counties, function(a, b) { return a !== b && (a.properties.STATEFP || '036') === ( b.properties.STATEFP || '036'); })) // the five boros have a null STATEFP because they're from a different shapefile.
+            .attr("d", path)
+            .attr("class", "county-boundary")
+            .style("fill", "none")
+            .style("stroke", "#ccc")
+            .style("stroke-dasharray", "1");
+  
+          var bridgestopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/bridges.json", 'utf8'));
+          var bridgesgeo = topojson.feature(bridgestopo, bridgestopo.objects['bridges']);
+          svg.selectAll(".bridge") // selects path elements, will make them if they don't exist
+            .data(bridgesgeo.features) // iterates over geo feature
+            .enter() // adds feature if it doesn't exist as an element
+            .append("path") // defines element as a path
+            .attr("class", function(d){ return "bridge " + d.properties.linearid; })
+            .style("stroke", "#ddd")
+            .style("stroke-width","0.5")
+            .style("fill", "none")
+            .attr("d", path) // path generator translates geo data to SVG
+  
+          var nycstufftopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nyc_parks_airports.json", 'utf8'));
+          var nycstuffgeo = topojson.feature(nycstufftopo, nycstufftopo.objects['nyc_parks_airports']);
+          svg.selectAll(".nycstuff") // selects path elements, will make them if they don't exist
+            .data(nycstuffgeo.features) // iterates over geo feature
+            .enter() // adds feature if it doesn't exist as an element
+            .append("path") // defines element as a path
+            .attr("class", function(d){ return "nycstuff " + d.properties["ntaname"]; })
+            .style("fill", function(d){ return d.properties.ntaname == "Airport" ? "#ffcccc" : "#339933"; })
+            .attr("d", path) // path generator translates geo data to SVG
+          var airportstopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/airports.json", 'utf8'));
+          var airportsgeo = topojson.feature(airportstopo, airportstopo.objects['airports']);
+          svg.selectAll(".airport") // selects path elements, will make them if they don't exist
+            .data(airportsgeo.features) // iterates over geo feature
+            .enter() // adds feature if it doesn't exist as an element
+            .append("path") // defines element as a path
+            .attr("class", function(d){ return "airport " + d.properties["LOCID"]; })
+            .style("stroke", "#fff")
+            .attr("d", path) // path generator translates geo data to SVG
+      }
 
       let strokeWidth = 2;
       svg.selectAll('marker.airplane.start')
@@ -257,7 +259,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
         .append("text")
           .attr("class", "airplane-label end")
           .attr("transform", function(d) { return "translate(" + end_projected_coords + ")"; })
-          .text(function(d) { return airplane_nice_name.toUpperCase() + " " + time_to_display(this_trajectory_rows[this_trajectory_rows.length-1].datetz); });
+          .text(function(d) { return include_background ? airplane_nice_name.toUpperCase() + " " + time_to_display(this_trajectory_rows[this_trajectory_rows.length-1].datetz) : ''; });
 
       var start_projected_coords = projection([this_trajectory_rows[0].lon, this_trajectory_rows[0].lat]);
       start_projected_coords[0] = start_projected_coords[0] + 10; // translate the label start 10px to the right.
@@ -267,10 +269,10 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, cb){
         .append("text")
           .attr("class", "airplane-label start")
           .attr("transform", function(d) { return "translate(" + start_projected_coords + ")"; })
-          .text(function(d) { return airplane_nice_name.toUpperCase() + " " +  time_to_display(this_trajectory_rows[0].datetz);} );
+          .text(function(d) { return include_background ? airplane_nice_name.toUpperCase() + " " +  time_to_display(this_trajectory_rows[0].datetz) : '';} );
       // stupidly, the D3 script tag is left in the generated SVG, so we have to remove it.
-      cb( "<html>" + window.d3.select("html").html().replace(/\<script[^<]*\<\/script\>/, '') + "</html>" );
-
+      //cb( "<html>" + window.d3.select("html").html().replace(/\<script[^<]*\<\/script\>/, '') + "</html>" );
+      cb( window.d3.select("body").html().replace(/\<script[^<]*\<\/script\>/, '') );
     }
   });
 }
@@ -305,7 +307,7 @@ function metadataForPoints(this_trajectory_rows, this_trajectory_rows_grouped){
     }
 }
 
-function writeMapAndMetadataForTrajectory(this_trajectory_rows){
+function writeMapAndMetadataForTrajectory(this_trajectory_rows, include_background=true){
   // create a list of sub-trajectories grouped either into those whose constituent points are 
   //  - separated by under MAX_UNMARKED_INTERPOLATION_SECS (e.g. 30 secs)
   //  - separated by more
@@ -323,7 +325,7 @@ function writeMapAndMetadataForTrajectory(this_trajectory_rows){
     return memo;
   }, [])
 
-  mapPoints(this_trajectory_rows,this_trajectory_rows_grouped, (html) => {
+  mapPoints(this_trajectory_rows,this_trajectory_rows_grouped, include_background, (html) => {
     fs.writeFileSync(output_fn, html);
   })
 
@@ -356,7 +358,6 @@ function sortRowsByCorrectedTime(rows){
     return memo;
   }, {}))
 
-  console.log(one_time_per_client)
   var first_client = one_time_per_client.pop()
   // if the difference is 50+ minutes, it's an hour difference. Less than that, we assume it's because we're comparing points that were legitimately seen at different times.
   var hour_differences = _(one_time_per_client).reduce(function(acc, client_id_time){ acc.push([client_id_time[0], Math.floor((Date.parse(client_id_time[1]) - Date.parse(first_client[1]) + 1000 * 60 * 10) / 1000 / 60 / 60) ]); return acc }, [[first_client[0], 0]])
