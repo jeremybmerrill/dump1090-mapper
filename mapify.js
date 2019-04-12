@@ -11,24 +11,31 @@ var fs = require('fs');
 var jsdom = require('jsdom');
 var gju =      require('geojson-utils');
 var commander = require('commander');
+ 
+commander
+  .version('0.0.0')
+  .option('-n, --n-number [N12345]', 'aircraft N-Number (or other label)')
+  .option('-s, --start-time [mysqlFormatTime]', 'start time for trajectory to be mapped (must also supply end-time), e.g. 2019-04-02 04:37:38)')
+  .option('-e, --end-time [mysqlFormatTime]', 'end time for trajectory to be mapped (must also supply start-time, e.g. 2019-04-02 04:37:38)')
+  .option('-b, --exclude-background', 'Exclude the map background/labels; show just trajectory')
+  .parse(process.argv);
+ 
 
-input = process.argv[2]
+input_icao_hex = commander.args[0]
 input_type = "icao" // ENHANCEMENT: accept N number queries, translate them into ICAO hexes via FAA database.
-airplane_nice_name = process.argv.length >= 4 ? process.argv[3] : input
+airplane_nice_name = commander.nNumber
 output_fn = airplane_nice_name + ".svg"
 output_metadata_fn = airplane_nice_name + ".metadata.json" //# [include neighborhood names, start/end times]
+include_background = !commander.excludeBackground
 
 // I should probably invest in a cli args parser!
-if (process.argv.length >= 6){
-  trajectory_start_time = process.argv[4] // in mysql format, plz! -- and in UTC
-  trajectory_end_time = process.argv[5] // in mysql format, plz!  -- and in UTC
+if (commander.startTime && commander.endTime){
+  trajectory_start_time = commander.startTime // in mysql format, plz! -- and in UTC
+  trajectory_end_time = commander.endTime // in mysql format, plz!  -- and in UTC
 }else{
   trajectory_start_time = null
   trajectory_end_time = null 
 }
-
-
-
 
 var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
 
@@ -240,7 +247,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_b
         .data(linestring.features) // iterates over geo feature
         .enter() // adds feature if it doesn't exist as an element
         .append("path") // defines element as a path
-        .attr("class", function(d){ return "airplane " + input + (d.properties.interpolated ? ' interp' : ''); })
+        .attr("class", function(d){ return "airplane " + input_icao_hex + (d.properties.interpolated ? ' interp' : ''); })
         .attr("id", function(d, i){ return "airplane-" + i.toString() })
         .style("stroke", function(d){ return d.properties.interpolated ? "#ef6e17" : "#f00" })
         .style("stroke-width", strokeWidth)
@@ -259,7 +266,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_b
         .append("text")
           .attr("class", "airplane-label end")
           .attr("transform", function(d) { return "translate(" + end_projected_coords + ")"; })
-          .text(function(d) { return include_background ? airplane_nice_name.toUpperCase() + " " + time_to_display(this_trajectory_rows[this_trajectory_rows.length-1].datetz) : ''; });
+          .text(function(d) { return include_background ? airplane_nice_name + " " + time_to_display(this_trajectory_rows[this_trajectory_rows.length-1].datetz) : ''; });
 
       var start_projected_coords = projection([this_trajectory_rows[0].lon, this_trajectory_rows[0].lat]);
       start_projected_coords[0] = start_projected_coords[0] + 10; // translate the label start 10px to the right.
@@ -269,7 +276,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_b
         .append("text")
           .attr("class", "airplane-label start")
           .attr("transform", function(d) { return "translate(" + start_projected_coords + ")"; })
-          .text(function(d) { return include_background ? airplane_nice_name.toUpperCase() + " " +  time_to_display(this_trajectory_rows[0].datetz) : '';} );
+          .text(function(d) { return include_background ? airplane_nice_name + " " +  time_to_display(this_trajectory_rows[0].datetz) : '';} );
       // stupidly, the D3 script tag is left in the generated SVG, so we have to remove it.
       //cb( "<html>" + window.d3.select("html").html().replace(/\<script[^<]*\<\/script\>/, '') + "</html>" );
       cb( window.d3.select("body").html().replace(/\<script[^<]*\<\/script\>/, '') );
@@ -376,7 +383,7 @@ if (trajectory_start_time && trajectory_end_time){
   var query = `
     select *, convert_tz(parsed_time, '+00:00', 'US/Eastern') as datetz 
     from squitters 
-    where icao_addr = conv('${input}', 16,10) 
+    where icao_addr = conv('${input_icao_hex}', 16,10) 
       and lat is not null 
       and parsed_time <= '${trajectory_end_time}' and parsed_time >= '${trajectory_start_time}'
     order by parsed_time desc;
@@ -393,15 +400,15 @@ if (trajectory_start_time && trajectory_end_time){
     var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
 
     if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
-      console.log("no geo data found for " + input)
-      throw "no geo data found for " + input;
+      console.log("no geo data found for " + input_icao_hex)
+      throw "no geo data found for " + input_icao_hex;
     } 
 
     _(_.zip(rows.slice(0, -2), rows.slice(1,-1))).each(function(two_rows){
       two_rows[1]["timediff"] = two_rows[0].datetz - two_rows[1].datetz;
     })
 
-    writeMapAndMetadataForTrajectory(rows);
+    writeMapAndMetadataForTrajectory(rows, include_background);
   });
   connection.end();
   console.log(output_fn)
@@ -414,7 +421,7 @@ if (trajectory_start_time && trajectory_end_time){
   var query = `
     select *, convert_tz(parsed_time, '+00:00', 'US/Eastern')  as datetz 
     from squitters 
-    where icao_addr = conv('${input}', 16,10) 
+    where icao_addr = conv('${input_icao_hex}', 16,10) 
       and lat is not null 
     order by parsed_time desc;
   `;
@@ -426,8 +433,8 @@ if (trajectory_start_time && trajectory_end_time){
     var lats = _(rows).reduce(function(memo, row){ if(row["lat"]){memo.push(row["lat"])}; return memo; }, [])
 
     if (lats.length < 1){ // if there's only one point, or zero, this won't work, so we'll give up.
-      console.log("no geo data found for " + input)
-      throw "no geo data found for " + input;
+      console.log("no geo data found for " + input_icao_hex)
+      throw "no geo data found for " + input_icao_hex;
     } 
 
 
@@ -437,7 +444,7 @@ if (trajectory_start_time && trajectory_end_time){
     var firstRecordBeforeTheGap = _.findIndex(rows, function(row){ return Math.abs(row["timediff"]) > 60*MAX_TIME_DIFFERENCE_BETWEEN_TRAJECTORIES*1000; });
     var this_trajectory_rows = rows.slice(0, firstRecordBeforeTheGap);
     var this_trajectory_rows = sortRowsByCorrectedTime(this_trajectory_rows);
-    writeMapAndMetadataForTrajectory(this_trajectory_rows);
+    writeMapAndMetadataForTrajectory(this_trajectory_rows, include_background);
   });
   connection.end();
   console.log(output_fn)
