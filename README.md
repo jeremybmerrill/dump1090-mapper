@@ -5,6 +5,22 @@ a node app to generate a map of an airplane's flight path, using its ICAO addres
 
 `nodejs mapify.js ACB963` will generate an SVG map of the most recent path of the NYPD helicopter with the registration number N919PD.
 
+`nodejs mapify.js ACB963 --n-number N920PD` will do the same, but using the aircraft's registration number instead of its ICAO hex address in the map.
+
+`nodejs mapify.js ACB963 --n-number N920PD --start-time '2019-04-02 03:51:57' --end-time '2019-04-02 04:37:38'` will map the trajectory of the aircraft between 3:51am and 4:37am  on 4/2/2019 (rather than the most recent trajectory).
+
+```
+Usage: mapify [options]
+
+Options:
+  -V, --version                       output the version number
+  -n, --n-number [N12345]             aircraft N-Number (or other label)
+  -s, --start-time [mysqlFormatTime]  start time for trajectory to be mapped (must also supply end-time), e.g. 2019-04-02 04:37:38)
+  -e, --end-time [mysqlFormatTime]    end time for trajectory to be mapped (must also supply start-time, e.g. 2019-04-02 04:37:38)
+  -b, --exclude-background            Exclude the map background/labels; show just trajectory
+  -h, --help                          output usage information
+```
+
 `sh mapify.sh ACB963` will generate a PNG map (by creating the SVG, then converting it to PNG with Apache Batik)
 
 If your MySQL database is not named `dump1090` or isn't accessible by the current user on localhost, specify how to reach it with the environment variables `MYSQLHOST`, `MYSQLPORT`, `MYSQLUSER`, `MYSQLPASSWORD` and `MYSQLDATABASE`.
