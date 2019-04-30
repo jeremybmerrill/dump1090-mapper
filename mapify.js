@@ -14,9 +14,10 @@ var commander = require('commander');
  
 commander
   .version('0.0.0')
-  .option('-n, --n-number [N12345]', 'aircraft N-Number (or other label)')
-  .option('-s, --start-time [mysqlFormatTime]', 'start time for trajectory to be mapped (must also supply end-time), e.g. 2019-04-02 04:37:38)')
-  .option('-e, --end-time [mysqlFormatTime]', 'end time for trajectory to be mapped (must also supply start-time, e.g. 2019-04-02 04:37:38)')
+  .option('-n, --n-number <N12345>', 'aircraft N-Number (or other label)')
+  .option('-s, --start-time <mysqlFormatTime>', 'start time for trajectory to be mapped (must also supply end-time), e.g. 2019-04-02 04:37:38)')
+  .option('-e, --end-time <mysqlFormatTime>', 'end time for trajectory to be mapped (must also supply start-time, e.g. 2019-04-02 04:37:38)')
+  .option('-a, --arbitrary-marker <lonlat>', 'arbitrary point to be mapped, in lon,lat format, e.g. -73.9037267,40.708143')
   .option('-b, --exclude-background', 'Exclude the map background/labels; show just trajectory')
   .parse(process.argv);
  
@@ -27,7 +28,7 @@ airplane_nice_name = commander.nNumber
 output_fn = airplane_nice_name + ".svg"
 output_metadata_fn = airplane_nice_name + ".metadata.json" //# [include neighborhood names, start/end times]
 include_background = !commander.excludeBackground
-
+arbitrary_marker_location = commander.arbitraryMarker ? commander.arbitraryMarker.split(",").map((num) => parseFloat(num)) : null;
 // I should probably invest in a cli args parser!
 if (commander.startTime && commander.endTime){
   trajectory_start_time = commander.startTime // in mysql format, plz! -- and in UTC
@@ -192,7 +193,7 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_b
           var nycstufftopo = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nyc_parks_airports.json", 'utf8'));
           var nycstuffgeo = topojson.feature(nycstufftopo, nycstufftopo.objects['nyc_parks_airports']);
           svg.selectAll(".nycstuff") // selects path elements, will make them if they don't exist
-            .data(nycstuffgeo.features) // iterates over geo feature
+            .data(nycstuffgeo.features) // iterates over geo feature (Parks, airports)
             .enter() // adds feature if it doesn't exist as an element
             .append("path") // defines element as a path
             .attr("class", function(d){ return "nycstuff " + d.properties["ntaname"]; })
@@ -256,6 +257,21 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_b
         .attr("d", path) // path generator translates geo data to SVG
         .attr('marker-start', function(d,i){ return (i == linestring.features.length - 1) ? 'url(#marker-airplane-end)' : 'none' }) // this reversal is on purpose
         .attr('marker-end', function(d,i){ return (i == 0) ? 'url(#marker-airplane-start)' : 'none' }) // this reversal is on purpose
+
+      // hovering location, if set on CLI.
+      if (arbitrary_marker_location) {
+        console.log(arbitrary_marker_location);
+        var arbitrary_marker = projection(arbitrary_marker_location); //[lon, lat], [-73.9637267, 40.678143]
+        svg.selectAll("text.arbitrary-marker")
+          .data([0])
+          .enter()
+          .append("circle")
+            .attr("class", "arbitrary-marker")
+            .attr("fill", "#4253f4")
+            .attr("r", 8)
+            .attr("cx", arbitrary_marker[0])
+            .attr("cy", arbitrary_marker[1]);
+      }
 
       // label the start and end points of the trajectory.
       var end_projected_coords = projection([this_trajectory_rows[this_trajectory_rows.length-1].lon, this_trajectory_rows[this_trajectory_rows.length-1].lat]);
