@@ -54,3 +54,5 @@ Location and Zoom
 -----------------
 
 The base map is centered around New York City: it includes county boundaries and airports in New York, New Jersey and Connecticut, and additional features in New York City. The zoom mechanism assumes your ADSB receiver has the same boundaries (or close to it) as mine. Generalizing this is work that still remains to be done (and I'm probably not going to do it... but I'd happily accept pull requests with data for other cities).
+
+I made the bridges by taking a road shapefile, taking the difference from the land area of NYC (to get just over-water sections of road), then filtering by length to eliminate the tiny little bridges along the Belt Pkwy, then took multipart to singlepart, buffered and exported.

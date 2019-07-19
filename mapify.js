@@ -21,6 +21,46 @@ commander
   .option('-b, --exclude-background', 'Exclude the map background/labels; show just trajectory')
   .parse(process.argv);
  
+// haversine formula. 
+function distance(lat1, lon1, lat2, lon2){
+  // var lat2 = 42.741; 
+  // var lon2 = -71.3161; 
+  // var lat1 = 42.806911; 
+  // var lon1 = -71.290611; 
+
+  var R = 3958.8; // 3958.8 mi; 6371 km 
+  //has a problem with the .toRad() method below.
+  var x1 = lat2-lat1;
+  var dLat = x1.toRad();  
+  var x2 = lon2-lon1;
+  var dLon = x2.toRad();  
+  var a = Math.sin(dLat/2) * Math.sin(dLat/2) + 
+                  Math.cos(lat1.toRad()) * Math.cos(lat2.toRad()) * 
+                  Math.sin(dLon/2) * Math.sin(dLon/2);  
+  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  var d = R * c; 
+
+  return d;
+}
+Number.prototype.toRad = function() {
+ return this * Math.PI / 180;
+}
+
+function pointAtDistance(lat1_deg, lon1_deg, distance_mi, bearing_deg){
+  R = 3958.8 // 3958.8 mi; 6371 km 
+  bearing_rad = bearing_deg.toRad()
+
+  lat1 = lat1_deg * (Math.PI / 180) // Current lat point converted to radians
+  lon1 = lon1_deg * (Math.PI / 180) // Current long point converted to radians
+
+  lat2 = Math.asin( Math.sin(lat1)*Math.cos(distance_mi/R) +
+               Math.cos(lat1)*Math.sin(distance_mi/R)*Math.cos(bearing_rad))
+  lon2 = lon1 + Math.atan2(Math.sin(bearing_rad)*Math.sin(distance_mi/R)*Math.cos(lat1),
+                       Math.cos(distance_mi/R)-Math.sin(lat1)*Math.sin(lat2))
+  return {lat: lat2 / (Math.PI / 180), lon: lon2 / (Math.PI / 180)}
+}
+
+
 
 input_icao_hex = commander.args[0]
 input_type = "icao" // ENHANCEMENT: accept N number queries, translate them into ICAO hexes via FAA database.
@@ -39,6 +79,7 @@ if (commander.startTime && commander.endTime){
 }
 
 var nyntas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/nynta_17a.json", 'utf8')).features;
+var bridge_areas = JSON.parse(fs.readFileSync(__dirname +"/basemap/json/bridges_buffered.geojson", 'utf8')).features;
 
 var connection = mysql.createConnection({
   host     : process.env.MYSQLHOST,
@@ -210,6 +251,21 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_b
             .attr("d", path) // path generator translates geo data to SVG
       }
 
+      // hovering location, if set on CLI.
+      if (arbitrary_marker_location) {
+        console.warn(arbitrary_marker_location);
+        var arbitrary_marker = projection(arbitrary_marker_location); //[lon, lat], [-73.9637267, 40.678143]
+        svg.selectAll("text.arbitrary-marker")
+          .data([0])
+          .enter()
+          .append("circle")
+            .attr("class", "arbitrary-marker")
+            .attr("fill", "#4253f4")
+            .attr("r", 8)
+            .attr("cx", arbitrary_marker[0])
+            .attr("cy", arbitrary_marker[1]);
+      }
+
       let strokeWidth = 2;
       svg.selectAll('marker.airplane.start')
         .data([0]) // we're just defining this marker, data here doesn't matter
@@ -258,21 +314,6 @@ function mapPoints(this_trajectory_rows, this_trajectory_rows_grouped, include_b
         .attr('marker-start', function(d,i){ return (i == linestring.features.length - 1) ? 'url(#marker-airplane-end)' : 'none' }) // this reversal is on purpose
         .attr('marker-end', function(d,i){ return (i == 0) ? 'url(#marker-airplane-start)' : 'none' }) // this reversal is on purpose
 
-      // hovering location, if set on CLI.
-      if (arbitrary_marker_location) {
-        console.log(arbitrary_marker_location);
-        var arbitrary_marker = projection(arbitrary_marker_location); //[lon, lat], [-73.9637267, 40.678143]
-        svg.selectAll("text.arbitrary-marker")
-          .data([0])
-          .enter()
-          .append("circle")
-            .attr("class", "arbitrary-marker")
-            .attr("fill", "#4253f4")
-            .attr("r", 8)
-            .attr("cx", arbitrary_marker[0])
-            .attr("cy", arbitrary_marker[1]);
-      }
-
       // label the start and end points of the trajectory.
       var end_projected_coords = projection([this_trajectory_rows[this_trajectory_rows.length-1].lon, this_trajectory_rows[this_trajectory_rows.length-1].lat]);
       end_projected_coords[0] = end_projected_coords[0] + 10; // translate the label start 10px to the right.
@@ -311,8 +352,18 @@ function neighborhoodNamesForPoints(this_trajectory_rows){
     }
     return memo;
   }, {});
+  _(this_trajectory_rows).each(function(row){ 
+    var nta = _(bridge_areas).find(function(nta){
+      return gju.pointInPolygon({"type":"Point","coordinates":[row["lon"], row["lat"]]},
+                 nta["geometry"]);
+    });
+    if(nta){
+      neighborhood_name_counts[nta["properties"]["fullname"]] = (neighborhood_name_counts[nta["properties"]["fullname"]] || 0) + 1;
+    }
+  }, {});
   var neighborhood_names = _(Object.keys(neighborhood_name_counts)).chain().sortBy(function(name){ return -neighborhood_name_counts[name] }).reject(function(name){ return name.indexOf("park-cemetery-etc") > -1 }).map(function(name){ return name == "North Side-South Side" ? "Williamsburg" : name.split("-")}).flatten().value()
-  return neighborhood_names
+
+  return neighborhood_names;
 }
 
 function centerpointOfRows(this_trajectory_rows){
@@ -326,17 +377,45 @@ function centerpointOfRows(this_trajectory_rows){
   var z = xyzs.reduce((memo, row) => memo + row[2], 0) / xyzs.length
 
   // Convert average x, y, z coordinate to latitude and longitude.
-  var lon = Math.atan2(y, x) * (180 / Math.PI)
+  var centerpoint_lon = Math.atan2(y, x) * (180 / Math.PI)
   var hyp = Math.sqrt(x * x + y * y)
-  var lat = Math.atan2(z, hyp) * (180 / Math.PI)
-  return {'lat': lat, 'lon': lon}
+  var centerpoint_lat = Math.atan2(z, hyp) * (180 / Math.PI)
+
+  var dists = this_trajectory_rows.map((row) => distance(row.lat, row.lon, centerpoint_lat, centerpoint_lon ));
+  dists = _(dists).sortBy((dist) => Math.abs(dist))
+  dists = dists.slice(dists.length * 0.2, dists.length * 0.8)
+  var radius = dists.reduce((memo, nxt) => memo + nxt, 0) / dists.length;
+
+  return {'lat': centerpoint_lat, 'lon': centerpoint_lon, 'radius': radius}
 }
 
 function metadataForPoints(this_trajectory_rows, this_trajectory_rows_grouped){
   var neighborhood_names = neighborhoodNamesForPoints(this_trajectory_rows);
   var centerpoint = centerpointOfRows(this_trajectory_rows);
+  // var hover_neighborhood_names = neighborhoodNamesForPoints(this_trajectory_rows.slice(this_trajectory_rows.length * 0.3, this_trajectory_rows.length * 0.7))
+  // experiment 7/10/2019: trying to fix the listed neighborhoods being "out of date" when teh helicopter has hovered in one place but now hovers elsewhere.
+  // WAS var hover_neighborhood_names = neighborhoodNamesForPoints(this_trajectory_rows.slice(this_trajectory_rows.length * 0.3, this_trajectory_rows.length * 0.7))
+  if(arbitrary_marker_location){
+
+
+    var nearby_points = [
+      pointAtDistance(arbitrary_marker_location[1], arbitrary_marker_location[0], centerpoint["radius"], 0),
+      pointAtDistance(arbitrary_marker_location[1], arbitrary_marker_location[0], centerpoint["radius"], 90),
+      pointAtDistance(arbitrary_marker_location[1], arbitrary_marker_location[0], centerpoint["radius"], 180),
+      pointAtDistance(arbitrary_marker_location[1], arbitrary_marker_location[0], centerpoint["radius"], 270)
+    ]
+
+    var hover_neighborhood_names = neighborhoodNamesForPoints([{"lat": arbitrary_marker_location[1], "lon": arbitrary_marker_location[0]}] + nearby_points);
+    console.log(hover_neighborhood_names)
+  }else{
+    var hover_neighborhood_names = neighborhoodNamesForPoints(this_trajectory_rows.slice(this_trajectory_rows.length * 0.3, this_trajectory_rows.length * 0.7));
+  }
+  
+
+
   return {
       "nabes": neighborhood_names,
+      "hover_nabes": hover_neighborhood_names,
       "end_recd_time": this_trajectory_rows[0].datetz, // time received by ADSB device
       "start_recd_time": this_trajectory_rows[this_trajectory_rows.length-1].datetz, // time received by ADSB device
       // "start_ac_time": this_trajectory_rows[0].datetz, // time generated by aircraft (often off by hours due to DST/timezone settings, like a microwave)
