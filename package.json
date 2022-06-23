@@ -8,7 +8,7 @@
     "commander": "^2.20.0",
     "d3": "^3.5.17",
     "geojson-utils": "^1.1.0",
-    "jsdom": "^9.2.1",
+    "jsdom": "^16.5.0",
     "mysql": "^2.10.2",
     "puppeteer": "^1.14.0",
     "topojson": "^1.6.26",
